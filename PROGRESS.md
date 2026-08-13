@@ -1086,6 +1086,27 @@ object, which would never reference-match anything in the *new* array,
 silently misclassifying every item as uncertain. Fixed to compare by
 `.url` instead, which survives the array being replaced.
 
+## Best-guess ranking reverted -- direction didn't generalize
+
+The "later detection is more likely correct" ranking above lasted one
+round. User tested a new same-titled pair and got the opposite result
+from the one that motivated the ranking in the first place: this time the
+earlier detection was the correct file, not the later one. Two data
+points pointing in opposite directions means there was never a real
+signal, just one coincidental case being over-read as a pattern.
+
+Reverted `content-script.js` and `popup.js` back to the flat
+"(unconfirmed)" labeling from the round before (both members of a
+repeated-title group flagged equally, no favored pick) via `git checkout
+885bbd7 -- ...` rather than hand-reconstructing it, to guarantee an exact
+revert. The uniqueness hash suffix and everything else from that round is
+unaffected. No further attempt at ranking same-titled entries without a
+genuinely reliable signal (e.g. actual duration/content probing) -- that
+would need real engineering investment (fetching and inspecting each
+candidate, not just reading a timestamp), not another guess from a single
+example. Flagging both and letting the user check the downloaded file
+(as they've done successfully twice now) is the honest ceiling here.
+
 ## Suggested next steps, in order
 
 1. ~~Load the extension in a real browser~~ — done, this is what surfaced
