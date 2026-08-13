@@ -146,24 +146,43 @@ platform artifacts now sit together in `client/dist/` with consistent
 naming (`download-manager-client_0.1.0_amd64.deb`,
 `..._0.1.0.apk`, `..._0.1.0_windows-x64.zip`).
 
-**iOS — compile-check only, by explicit user choice, passing.** User
-asked about iOS; was given the real tradeoff rather than just building
-something — unlike Windows/Android, iOS enforces code signing at the OS
-level with no unsigned-but-installable path (no SmartScreen-style
-click-through, no APK-style sideload). Getting an app onto an actual
-iPhone needs the user's own Apple Developer Program membership
-($99/year, for TestFlight/App Store) or a free Apple ID (self-signed,
-7-day expiry, one device, needs their own Mac + Xcode) — a real
-cost/setup decision, not something to set up unprompted. User chose the
-"just verify it compiles" option. Added `client/ios/` (same
+**iOS — unsigned `.ipa` built and verified, real device install still
+needs the user's own signing step.** User first asked for a
+compile-check only (given the real tradeoff: unlike Windows/Android,
+iOS enforces code signing at the OS level with no
+unsigned-but-installable path — no SmartScreen-style click-through, no
+APK-style sideload). Added `client/ios/` (same
 `flutter create --platforms=ios .` pattern as Windows, same
 `.metadata` platform-list-gets-overwritten quirk, fixed the same way)
 and a `build-ios` job on `macos-latest` running
-`flutter build ios --release --no-codesign` — no artifact upload,
-since an unsigned build produces nothing installable, only a
-pass/fail signal that the Dart/Flutter code itself is iOS-compatible
-(the same kind of check `flutter analyze` already does for every other
-platform). Passing on the first CI run.
+`flutter build ios --release --no-codesign`.
+
+User then asked to actually test on a real iPhone XR. Extended the same
+job to package the unsigned `Runner.app` into a properly-structured
+`.ipa` (`Payload/Runner.app/...` zipped — the format any iOS installer
+expects) rather than leaving it as a bare `.app`. **Verified the
+structure directly**: downloaded the CI artifact, unzipped it, confirmed
+`Payload/Runner.app/` layout with `Runner` (the executable),
+`Info.plist`, `Frameworks/App.framework`, etc. — a real, well-formed
+.ipa, not a placeholder. Copied to
+`client/dist/download-manager-client_0.1.0_unsigned.ipa`.
+
+**This still will not install on the iPhone XR as-is.** Unsigned code is
+categorically refused by iOS regardless of "just testing" vs.
+"publishing" intent — there is no dev-mode bypass for this on a
+non-jailbroken device. The remaining step has to happen on the user's
+own machine with their own Apple ID, not here:
+- **Free Apple ID + Sideloadly or AltStore** (Windows or Mac): these
+  tools take an unsigned `.ipa` like this one and sign it themselves
+  using the user's Apple ID during the sideload process — no Xcode
+  required. Self-expires after 7 days (free-tier Apple limitation, not a
+  tool limitation), needs re-sideloading after that.
+- **Free Apple ID + Xcode directly** (Mac only): same 7-day limitation,
+  install via USB cable instead of a sideloading tool.
+- **Paid Apple Developer Program membership** ($99/year): would let this
+  become a properly signed CI build (TestFlight or ad-hoc) instead of an
+  unsigned artifact requiring a separate sideloading step — not set up,
+  needs the user's account/cost decision first.
 
 **Also found and fixed while reviewing what `git add --dry-run` would
 stage** (a genuinely useful side effect of checking what's about to be
