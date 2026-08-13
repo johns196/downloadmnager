@@ -16,10 +16,22 @@ const cache = new Map<string, { result: SniffResult; expiresAt: number }>();
  * sniffer-service on every call, so /api/sniff/grab -- which re-resolves
  * the URL to find the stream the client picked -- would essentially never
  * find a matching id without this cache keeping the ids stable for the
- * lifetime of one "sniff, then let the user pick a stream" interaction. */
-export async function sniffUrl(pageUrl: string, signal?: AbortSignal): Promise<SniffResult> {
+ * lifetime of one "sniff, then let the user pick a stream" interaction.
+ *
+ * `forceFresh` exists because that cache-read must NOT apply to an
+ * explicit, user-initiated sniff (POST /api/sniff): on an SPA where
+ * picking a different item doesn't change the page URL (e.g. Anghami --
+ * clicking another track in "Recommended Songs" plays it in place without
+ * navigating), re-clicking "Sniff" within the TTL window would otherwise
+ * silently hand back the previous track's stream instead of resniffing.
+ * Only the internal id-resolution call from createJobFromSniff wants the
+ * cached read; every user-facing sniff always goes live and refreshes it. */
+export async function sniffUrl(
+  pageUrl: string,
+  options?: { forceFresh?: boolean; signal?: AbortSignal },
+): Promise<SniffResult> {
   const cached = cache.get(pageUrl);
-  if (cached && cached.expiresAt > Date.now()) {
+  if (!options?.forceFresh && cached && cached.expiresAt > Date.now()) {
     return cached.result;
   }
 
@@ -29,7 +41,7 @@ export async function sniffUrl(pageUrl: string, signal?: AbortSignal): Promise<S
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url: pageUrl }),
-      signal,
+      signal: options?.signal,
     });
   } catch (err) {
     throw new SnifferServiceError(

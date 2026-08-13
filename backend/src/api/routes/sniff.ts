@@ -10,7 +10,10 @@ sniffRouter.post("/", async (req, res) => {
     return res.status(400).json({ error: "url is required" });
   }
   try {
-    const result = await sniffUrl(url);
+    // forceFresh: this is the user clicking "Sniff" -- always go live, never
+    // silently return a previous track's stream from the cache (see
+    // SnifferClient.sniffUrl's doc comment).
+    const result = await sniffUrl(url, { forceFresh: true });
     res.json(result);
   } catch (err) {
     res.status(502).json({ error: (err as Error).message });

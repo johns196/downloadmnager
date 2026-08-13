@@ -13,6 +13,11 @@ PORT = int(os.environ.get("SNIFFER_PORT", "8788"))
 # same as "not found" by the caller.
 YTDLP_TIMEOUT_SECONDS = 30
 NETWORK_SNIFF_TIMEOUT_SECONDS = 25
+# Time to let an SPA hydrate after DOMContentLoaded before looking for
+# interactive elements (e.g. a play button) or reading document.title --
+# separate from NETWORK_SNIFF_IDLE_WAIT_SECONDS, which is the *later*
+# window given for media requests to actually fire after interaction.
+NETWORK_SNIFF_SETTLE_SECONDS = 4
 NETWORK_SNIFF_IDLE_WAIT_SECONDS = 6
 
 # --- YouTube-specific extraction requirements ---

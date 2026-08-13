@@ -190,7 +190,17 @@ async def sniff_network(page_url: str) -> tuple[list[StreamDescriptor], list[str
 
         page_title: Optional[str] = None
         try:
-            await page.goto(page_url, wait_until="networkidle", timeout=config.NETWORK_SNIFF_TIMEOUT_SECONDS * 1000)
+            # "networkidle" never fires on sites with persistent background
+            # connections (polling, analytics beacons, websockets) -- e.g.
+            # this reliably timed out the whole sniff on Anghami, which
+            # keeps such connections open indefinitely. "domcontentloaded"
+            # plus an explicit settle delay is the pattern that actually
+            # worked in manual testing against exactly that kind of site.
+            await page.goto(page_url, wait_until="domcontentloaded", timeout=config.NETWORK_SNIFF_TIMEOUT_SECONDS * 1000)
+            await asyncio.sleep(config.NETWORK_SNIFF_SETTLE_SECONDS)
+            # Fetched after settling, not right after goto: SPAs commonly
+            # set the real (localized/hydrated) document.title well after
+            # the initial DOM parse.
             page_title = await page.title()
             await _try_trigger_playback(page)
             # Media often only starts requesting segments once a player

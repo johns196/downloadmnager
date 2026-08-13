@@ -761,22 +761,91 @@ After these three fixes, `web-ext lint` reports **zero errors**, one
 purely-informational warning (Chrome's `service_worker` key being
 correctly ignored on Firefox, exactly as intended by declaring both keys).
 
-**Not verified live.** This machine has Firefox installed, and even a
-real display (confirmed earlier in a different investigation), but the
-*user's own actual Firefox session was already running* on this box when
-this was being tested (real profile, real tabs, hours of uptime) —
-deliberately did not attempt to drive or attach to it via `web-ext run`'s
-remote-debugging behavior, to avoid any risk of disrupting a live session
-that isn't mine to touch. So: **the manifest is now Firefox-valid per
-Mozilla's own tooling, but nobody has actually clicked "Load Temporary
-Add-on" in `about:debugging` and confirmed it runs.** One specific thing
-worth checking when that happens: this codebase calls `chrome.*` APIs
-(e.g. `await chrome.storage.local.get(...)`) in Promise style with no
-callback, which is standard for Chrome's MV3 `chrome.*` — Firefox is
-documented to support this too (not just via the `browser.*` namespace),
-but that's the one area with any real uncertainty left. If the extension
-loads in Firefox but a storage-touching feature (backend URL setting,
-detected-media badge) silently doesn't work, start there.
+**Now verified live**, by the user, in their own real Firefox session
+(deliberately not driven remotely by this agent — see above for why). Two
+Firefox-specific problems surfaced that `web-ext lint` couldn't catch,
+since neither is a manifest defect:
+
+1. **"Unable to load script: moz-extension://.../content/content-script.js"
+   when loading via `about:debugging` → Load Temporary Add-on → pick
+   `manifest.json`.** Root cause: this machine's Firefox is a **snap**.
+   Snap-sandboxed apps' file-picker dialogs always go through the
+   `xdg-desktop-portal` document broker — the portal hands the sandbox
+   access to *only the single file the user clicked*, presented as if it
+   were alone in an empty directory, regardless of which real directory
+   it lives in or what other filesystem permissions the snap has (moving
+   the extension into `$HOME` did **not** help — this is inherent to the
+   picker, not a path/permission issue). So Firefox can open
+   `manifest.json` itself but can't resolve any sibling file it
+   references. **Fix**: package the extension as a single `.zip`
+   (`manifest.json` at the archive root, not nested in a subfolder) and
+   pick that instead — one file for the portal to hand over, and Firefox
+   unzips it internally, so no further sibling-file lookups happen.
+   `scripts/sync-firefox-extension.sh` now does this: rebuilds
+   `~/downloadmanager-extension.zip` from `extension/` on every run. Re-run
+   it after any extension code change, then in Firefox: Remove the old
+   temporary add-on → Load Temporary Add-on → pick that zip again.
+2. **Background script shows "Stopped" after ~30s of inactivity in
+   `about:debugging`.** Not a bug — MV3 background scripts are event
+   pages in both Chrome and Firefox; they unload when idle to save memory
+   and wake automatically on the next message/event (e.g. clicking the
+   launcher). No fix needed, just surprised the user seeing it the first
+   time.
+
+Storage APIs (`chrome.storage.session`/`.local`) and everything else in
+the extension code worked with zero changes once the zip-loading problem
+above was solved — the earlier "one area of real uncertainty" note about
+`chrome.*` vs `browser.*` promise style turned out to be a non-issue.
+
+## Sniffer reliability fixes (follow-up session, same week)
+
+Two real bugs surfaced from the user actually using the Firefox extension
+against Anghami, both fixed and verified:
+
+1. **`networkidle` timeout on sites with persistent background
+   connections.** `network_interceptor.py`'s Playwright fallback used to
+   `page.goto(..., wait_until="networkidle")`, which waits for zero
+   network activity for 500ms. Anghami (and sites like it — polling,
+   analytics beacons, websockets) never actually go network-idle, so this
+   reliably timed out the whole sniff at `NETWORK_SNIFF_TIMEOUT_SECONDS`
+   and surfaced as a raw "Page load did not fully settle: Timeout ...
+   exceeded" error to the user. This had been *identified* in an earlier
+   pass but explicitly left unfixed since it self-recovered on retry and
+   wasn't the actual blocker at the time (see Anghami reCAPTCHA finding
+   below) — fixed for real once the user hit it as a visible error.
+   **Fix**: `wait_until="domcontentloaded"` (fires once, always) followed
+   by an explicit `NETWORK_SNIFF_SETTLE_SECONDS` (4s) sleep before reading
+   `page.title()` or attempting playback — SPAs commonly hydrate their
+   real/localized title well after the initial DOM parse, so the title
+   read was moved to after the settle delay too. Verified against both
+   `play.anghami.com/song/1291297193` (15.78s, correct title, no timeout)
+   and `example.com` (18.1s, correct title, no regression on the simple
+   case).
+2. **Re-clicking "Sniff" on the same page URL returned the previous
+   track, not the one currently playing.** `SnifferClient.ts` caches
+   `/sniff` results per page URL for 5 minutes — necessary because
+   `StreamDescriptor.id` is regenerated by the sniffer-service on every
+   call, and `/api/sniff/grab` needs a stable id to resolve against a
+   result the user already saw. But that cache read was applied to
+   *every* call to `sniffUrl()`, including the one from the explicit
+   "Sniff" button click (`POST /api/sniff`) — so on an SPA where playing a
+   different item doesn't change the page URL (Anghami: picking another
+   track from "Recommended Songs" plays it in place via the persistent
+   bottom player, no navigation), re-sniffing within the TTL window
+   silently returned the old track's stream. **Fix**: `sniffUrl()` now
+   takes an optional `{ forceFresh }`; `POST /api/sniff` (the user-facing
+   action) always passes `forceFresh: true` and goes live, then refreshes
+   the cache; `QueueManager.createJobFromSniff`'s internal id-resolution
+   call (used only by grab, right after a sniff the user already saw)
+   keeps the old cache-preferring behavior unchanged. Verified: two
+   `POST /api/sniff` calls for the same URL back-to-back both took
+   ~13-15s (a real sniff each time) instead of the second one returning
+   near-instantly from cache as before.
+
+Both fixes live entirely in the shared backend/sniffer-service, so they
+apply to every client (extension, Ubuntu/Android/Windows/iOS app) without
+any client-side changes — none of the four apps have their own caching or
+page-load logic that could independently go stale.
 
 ## Suggested next steps, in order
 
