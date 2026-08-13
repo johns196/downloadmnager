@@ -27,7 +27,8 @@ db.exec(`
     post_process TEXT,
     chunk_state TEXT NOT NULL DEFAULT '[]',
     throttle_bytes_per_sec INTEGER,
-    supports_range INTEGER NOT NULL DEFAULT 0
+    supports_range INTEGER NOT NULL DEFAULT 0,
+    download_kind TEXT NOT NULL DEFAULT 'byte-range'
   );
 
   CREATE TABLE IF NOT EXISTS settings (
@@ -35,6 +36,25 @@ db.exec(`
     value TEXT NOT NULL
   );
 `);
+
+// Lightweight migration for databases created before download_kind
+// existed (CREATE TABLE IF NOT EXISTS above only takes effect for a
+// brand-new file -- an existing jobs table needs the column added
+// explicitly). No formal migration framework here, just this guarded
+// ALTER. The backfill must run only inside this branch, not on every
+// startup: unlike at migration time, a *future* legitimate byte-range job
+// can have size_bytes IS NULL too (a server that just doesn't report
+// Content-Length) -- unconditionally re-running this UPDATE on every
+// startup would keep mislabeling those as "manifest" forever.
+try {
+  db.exec("ALTER TABLE jobs ADD COLUMN download_kind TEXT NOT NULL DEFAULT 'byte-range'");
+  // One-time backfill for rows from before downloadKind existed, using
+  // the same size_bytes-is-null heuristic startJob used to rely on
+  // implicitly.
+  db.exec("UPDATE jobs SET download_kind = 'manifest' WHERE size_bytes IS NULL");
+} catch {
+  // already has the column -- migration already ran, nothing to do
+}
 
 const DEFAULT_SETTINGS: GlobalSettings = {
   maxConcurrentJobs: config.maxConcurrentJobs,
@@ -64,6 +84,7 @@ interface JobRow {
   chunk_state: string;
   throttle_bytes_per_sec: number | null;
   supports_range: number;
+  download_kind: string;
 }
 
 function rowToJob(row: JobRow): DownloadJob {
@@ -86,6 +107,7 @@ function rowToJob(row: JobRow): DownloadJob {
     source: row.source as DownloadJob["source"],
     mediaKind: row.media_kind as DownloadJob["mediaKind"],
     postProcess: row.post_process ? JSON.parse(row.post_process) : null,
+    downloadKind: row.download_kind as DownloadJob["downloadKind"],
   };
 }
 
@@ -102,12 +124,12 @@ const upsertStmt = db.prepare(`
     id, url, filename, output_path, state, size_bytes, downloaded_bytes,
     speed_bytes_per_sec, eta_seconds, chunks, created_at, updated_at,
     completed_at, error, sha256, source, media_kind, post_process,
-    chunk_state, throttle_bytes_per_sec, supports_range
+    chunk_state, throttle_bytes_per_sec, supports_range, download_kind
   ) VALUES (
     @id, @url, @filename, @output_path, @state, @size_bytes, @downloaded_bytes,
     @speed_bytes_per_sec, @eta_seconds, @chunks, @created_at, @updated_at,
     @completed_at, @error, @sha256, @source, @media_kind, @post_process,
-    @chunk_state, @throttle_bytes_per_sec, @supports_range
+    @chunk_state, @throttle_bytes_per_sec, @supports_range, @download_kind
   )
   ON CONFLICT(id) DO UPDATE SET
     filename=excluded.filename, output_path=excluded.output_path,
@@ -146,6 +168,7 @@ export const jobStore = {
       chunk_state: JSON.stringify(runtime.chunkState),
       throttle_bytes_per_sec: runtime.throttleBytesPerSec,
       supports_range: runtime.supportsRange ? 1 : 0,
+      download_kind: job.downloadKind,
     });
   },
 

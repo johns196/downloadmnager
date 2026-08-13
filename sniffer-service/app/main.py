@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import config, ytdlp_wrapper
-from .models import SniffRequest, SniffResult
+from .models import DownloadMergedRequest, DownloadMergedResult, SniffRequest, SniffResult
 
 app = FastAPI(title="Download Manager Sniffer Service", version="0.1.0")
 
@@ -45,3 +45,17 @@ async def sniff(req: SniffRequest) -> SniffResult:
             )
 
     return SniffResult(pageUrl=req.url, pageTitle=title, streams=streams, warnings=warnings)
+
+
+@app.post("/download-merged", response_model=DownloadMergedResult)
+async def download_merged(req: DownloadMergedRequest) -> DownloadMergedResult:
+    """Backing endpoint for a "yt-dlp-merge" stream grab -- see
+    ytdlp_wrapper.download_merged for why this writes directly to
+    outputPath on the shared filesystem instead of returning file bytes."""
+    if not req.url or not req.url.strip():
+        raise HTTPException(status_code=400, detail="url is required")
+    if not req.outputPath or not req.outputPath.strip():
+        raise HTTPException(status_code=400, detail="outputPath is required")
+
+    error = await ytdlp_wrapper.download_merged(req.url, req.outputPath)
+    return DownloadMergedResult(ok=error is None, error=error)

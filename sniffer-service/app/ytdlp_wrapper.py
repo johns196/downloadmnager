@@ -58,6 +58,13 @@ def _format_to_stream(fmt: dict, title: Optional[str], thumbnail: Optional[str])
     is_audio_only = fmt.get("vcodec") == "none"
     codec = fmt.get("acodec") if is_audio_only else fmt.get("vcodec")
     bitrate = fmt.get("tbr") or fmt.get("abr") or fmt.get("vbr")
+    # Modern YouTube (and often other sites) split high-quality video into
+    # a silent video-only DASH stream + a separate audio-only one -- both
+    # look identical to isAudioOnly=false without checking acodec too.
+    # Downloading a has_audio=False entry alone produces a file that plays
+    # with no sound, which is exactly the "movies don't really work" gap
+    # this field exists to make visible rather than silently ship.
+    has_audio = is_audio_only or (fmt.get("acodec") not in (None, "none"))
     return StreamDescriptor(
         id=str(uuid.uuid4()),
         url=url,
@@ -68,6 +75,7 @@ def _format_to_stream(fmt: dict, title: Optional[str], thumbnail: Optional[str])
         resolution=_resolution_for(fmt),
         durationSeconds=fmt.get("duration"),
         isAudioOnly=is_audio_only,
+        hasAudio=has_audio,
         title=title,
         thumbnailUrl=thumbnail,
         extractor="yt-dlp",
@@ -132,5 +140,82 @@ async def extract(page_url: str) -> tuple[list[StreamDescriptor], list[str], Opt
         stream = _format_to_stream(fmt, title, thumbnail)
         if stream:
             streams.append(stream)
+
+    # Offer one prominent "best quality, merged" option whenever there's
+    # actually something to merge -- i.e. the real content is split across
+    # a silent video stream and a separate audio stream (near-universal on
+    # modern YouTube for anything above ~360p). Its `url` is the *page*
+    # url, not fetchable directly; grabbing it routes to a dedicated yt-dlp
+    # download+merge job (QueueManager.createYtdlpMergeJob), not the
+    # regular single-URL downloader. Prepended (not appended) so it's the
+    # first, most prominent option -- the raw per-format list stays
+    # available below it for anyone who wants a specific resolution/codec.
+    has_silent_video = any(not s.isAudioOnly and not s.hasAudio for s in streams)
+    has_audio_only = any(s.isAudioOnly for s in streams)
+    if has_silent_video and has_audio_only:
+        streams.insert(
+            0,
+            StreamDescriptor(
+                id=str(uuid.uuid4()),
+                url=page_url,
+                protocol="direct",
+                container="mp4",
+                codec=None,
+                bitrateKbps=None,
+                resolution="best available",
+                durationSeconds=info.get("duration"),
+                isAudioOnly=False,
+                hasAudio=True,
+                title=title,
+                thumbnailUrl=thumbnail,
+                extractor="yt-dlp-merge",
+            ),
+        )
+
+    return streams, warnings, title
+
+
+async def download_merged(page_url: str, output_path: str) -> Optional[str]:
+    """Downloads the best available video-only + audio-only formats and
+    muxes them into one real, playable file at output_path -- what
+    QueueManager.createYtdlpMergeJob calls for a "yt-dlp-merge" grab.
+    Returns None on success, or an error message. Writes directly to
+    output_path on the shared filesystem rather than returning bytes over
+    HTTP: this service and the backend run on the same machine (the same
+    native-deployment assumption cookies-from-browser already depends on
+    -- see config.py), so there's no reason to double-handle a
+    potentially multi-GB file across an extra HTTP hop.
+
+    "bv*+ba/b" (yt-dlp's own default-ish selector, made explicit here
+    rather than relying on yt-dlp's actual default which is more
+    conservative): best video-only + best audio-only if both exist,
+    falling back to the best single combined format otherwise --
+    --merge-output-format mp4 forces the muxed container even when the
+    chosen video/audio codecs would otherwise default yt-dlp to mkv.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        YTDLP_BIN,
+        "-f",
+        "bv*+ba/b",
+        "--merge-output-format",
+        "mp4",
+        "--no-warnings",
+        "--no-playlist",
+        "-o",
+        output_path,
+        *_extra_args(),
+        page_url,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=config.YTDLP_DOWNLOAD_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        proc.kill()
+        return f"Timed out after {config.YTDLP_DOWNLOAD_TIMEOUT_SECONDS}s"
+
+    if proc.returncode != 0:
+        return stderr.decode("utf-8", errors="replace").strip().splitlines()[-1] if stderr else "yt-dlp failed"
+    return None
 
     return streams, warnings, title

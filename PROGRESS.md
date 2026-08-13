@@ -1237,6 +1237,84 @@ this session, sizes changed (confirming real rebuilds, not no-ops).
 `github.com/johns196/downloadmnager/releases/tag/v0.1.0` contain every
 fix from this entire session, not just the extension.
 
+## Real movie downloads: video+audio merge, and why "only music worked" (same week)
+
+User: "on youtube and dailymotion and elsewhere its sniffing only music i
+want also to get movies and can convert it to mp4." Investigated with a
+real test rather than assuming a UI bug: `POST /api/sniff` against a real
+YouTube URL *did* return video entries (29 of 33 streams) -- so it wasn't
+that video wasn't being found. Checked yt-dlp's raw format list directly:
+only **1 of 31** formats was genuinely muxed (both video+audio), capped
+at 360p. The other 22 "video" entries were silent, video-only DASH
+streams -- `isAudioOnly: false` was true for all of them, so the UI had
+no way to distinguish "plays with sound" from "silent" and the user had
+almost certainly been downloading silent files and giving up on video,
+while audio (always self-contained) kept working reliably. This is
+standard modern YouTube behavior, not a bug in the extraction -- above
+~360p, YouTube simply doesn't serve combined streams.
+
+Asked the user which fix they wanted rather than assuming: a quick
+honesty fix (label the existing 360p-with-sound option, mark the rest
+"no audio") vs. a real merge feature (download video-only + audio-only
+separately and mux them, full quality). They chose full merge.
+
+**Implementation, not a rebuild of yt-dlp's own merging** -- yt-dlp
+already does this natively (`-f "bv*+ba/b" --merge-output-format mp4`),
+so this reuses that rather than hand-rolling dual-download+mux logic in
+`QueueManager`:
+
+1. `sniffer-service/app/models.py` / `ytdlp_wrapper.py`: added
+   `hasAudio: bool` to `StreamDescriptor` (content-type/acodec-derived,
+   not inferable from `isAudioOnly` alone -- see docs/API.md for the
+   distinction). When a sniff finds both a silent video stream and an
+   audio-only stream, `extract()` now prepends one synthetic entry
+   (`extractor: "yt-dlp-merge"`, `url` = the *page* url, not fetchable
+   directly) representing "best quality, merged."
+2. New `ytdlp_wrapper.download_merged()` + `POST /download-merged`
+   endpoint: runs yt-dlp itself to download+mux, writing straight to a
+   `outputPath` on the shared filesystem (same native-deployment
+   assumption as `--cookies-from-browser`) rather than streaming a
+   potentially multi-GB file back over HTTP.
+3. `QueueManager` gained an explicit `downloadKind: "byte-range" |
+   "manifest" | "ytdlp-merge"` field on `DownloadJob`, replacing the old
+   implicit `sizeBytes === null` inference (already a documented fragile
+   pattern, and there was no room in it for a third execution path).
+   `createYtdlpMergeJob()` + `runYtdlpMergeJob()` mirror the existing
+   manifest-job pattern (call out, no byte-accurate progress, finalize
+   reads the real file size after). Needed a real SQLite migration (`ALTER
+   TABLE jobs ADD COLUMN download_kind ...` guarded in a try/catch, since
+   this machine already had a real jobs table with history predating the
+   column) plus a one-time backfill using the old sizeBytes-null heuristic
+   for any pre-existing manifest-kind rows.
+4. Both UIs (extension `popup.js`/`content-script.js`, Flutter
+   `sniffer_screen.dart`) now: show the merge entry first and visually
+   highlighted ("Download (best quality)"), label any silent video-only
+   stream with a clear "⚠ no audio" warning instead of leaving it
+   indistinguishable from a real video, and add a "Convert to MP4"
+   button (`transcode` action, already fully implemented backend-side
+   but never exposed in any UI before this) for non-mp4 video streams.
+
+**Verified for real at every layer, not just by reading the code**:
+`ytdlp_wrapper.download_merged()` called directly against a real 4K
+YouTube video -- `ffprobe` confirmed genuine `av1` video (3840x2160) +
+`opus` audio in one file. Full production path also verified end-to-end
+through the actual REST API (`POST /api/sniff` -> find the
+`yt-dlp-merge` id -> `POST /api/sniff/grab` -> poll job to `completed`)
+against a second, shorter video -- real merged mp4, correct sha256,
+`downloadKind: "ytdlp-merge"` on the finished job record. Confirmed the
+ordinary byte-range path (`POST /api/jobs` against a plain URL) still
+works unchanged after the `downloadKind` refactor, and confirmed the
+SQLite migration actually ran against the real existing database (not a
+fresh one) via `PRAGMA table_info`.
+
+**Known gap, documented rather than silently shipped**: aborting a
+yt-dlp-merge job's `AbortSignal` (pause/remove) stops the backend from
+waiting on it, but the sniffer-service has no cancellation wired to
+client disconnects -- its yt-dlp subprocess keeps running orphaned until
+it finishes naturally or hits `YTDLP_DOWNLOAD_TIMEOUT_SECONDS` (default
+30 min). Not fixed here; would need the Python endpoint to track and
+kill its own subprocess on request cancellation.
+
 ## Suggested next steps, in order
 
 1. ~~Load the extension in a real browser~~ — done, this is what surfaced

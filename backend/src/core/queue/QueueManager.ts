@@ -116,6 +116,7 @@ export class QueueManager {
       source: params.source ?? "manual",
       mediaKind: params.mediaKind ?? "file",
       postProcess: params.postProcess ?? null,
+      downloadKind: "byte-range",
     };
 
     const runtime: JobRuntimeState = {
@@ -147,6 +148,13 @@ export class QueueManager {
       stream.protocol === "hls" || stream.protocol === "dash" ? "mp4" : (stream.container ?? "mp4");
     const baseTitle = stream.title ?? result.pageTitle ?? "media";
     const filename = `${sanitizeFilename(baseTitle)}.${inferredExt}`;
+
+    if (stream.extractor === "yt-dlp-merge") {
+      // Synthetic entry from ytdlp_wrapper.extract() -- stream.url is the
+      // *page* url here, not a fetchable stream, so this can't go through
+      // createJob/createManifestJob at all. See createYtdlpMergeJob.
+      return this.createYtdlpMergeJob(pageUrl, filename, postProcess ?? null);
+    }
 
     if (stream.protocol === "hls" || stream.protocol === "dash") {
       // Manifest-based streams are handed to ffmpeg directly rather than
@@ -189,6 +197,48 @@ export class QueueManager {
       source: "sniffer",
       mediaKind,
       postProcess,
+      downloadKind: "manifest",
+    };
+    const runtime: JobRuntimeState = { chunkState: [], throttleBytesPerSec: null, supportsRange: false };
+    jobStore.upsert(job, runtime);
+    downloadEvents.emitWsEvent({ type: "job:added", jobId: job.id, payload: job });
+    this.tryStartNext();
+    return job;
+  }
+
+  /** Video-only "best quality" streams (near-universal on modern YouTube
+   * above ~360p) have no audio track at all -- this downloads the best
+   * video-only + best audio-only formats via yt-dlp itself and muxes them
+   * into one real, playable file, rather than fetching a single URL like
+   * every other job kind here. See ytdlp_wrapper.download_merged for the
+   * actual yt-dlp invocation and why it writes straight to outputPath on
+   * the shared filesystem instead of streaming bytes back over HTTP. */
+  private async createYtdlpMergeJob(
+    pageUrl: string,
+    filename: string,
+    postProcess: PostProcessSpec | null,
+  ): Promise<DownloadJob> {
+    const outputPath = uniqueOutputPath(config.downloadsDir, filename);
+    const job: DownloadJob = {
+      id: randomUUID(),
+      url: pageUrl,
+      filename: path.basename(outputPath),
+      outputPath,
+      state: "queued",
+      sizeBytes: null,
+      downloadedBytes: 0,
+      speedBytesPerSec: 0,
+      etaSeconds: null,
+      chunks: 1,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+      completedAt: null,
+      error: null,
+      sha256: null,
+      source: "sniffer",
+      mediaKind: "video",
+      postProcess,
+      downloadKind: "ytdlp-merge",
     };
     const runtime: JobRuntimeState = { chunkState: [], throttleBytesPerSec: null, supportsRange: false };
     jobStore.upsert(job, runtime);
@@ -302,19 +352,17 @@ export class QueueManager {
     downloadEvents.emitWsEvent({ type: "job:update", jobId: id, payload: job });
 
     try {
-      // Branches on "do we know a size" alone, not size *and* range
-      // support: a known-size file on a server that just doesn't
-      // advertise Accept-Ranges still goes through the byte-range
-      // downloader (as a single non-range chunk covering the whole
-      // file -- see downloadChunk's !supportsRange handling), because
-      // ffmpeg's manifest path assumes a streamable media
-      // container/URL and errors out on arbitrary files. Only a truly
-      // unknown size (sizeBytes === null -- always true for HLS/DASH
-      // manifest jobs, see createManifestJob) falls to ffmpeg.
-      if (job.sizeBytes !== null) {
+      // Explicit on downloadKind rather than inferring from sizeBytes (a
+      // known size alone doesn't imply byte-range: a file on a server
+      // that just doesn't advertise Accept-Ranges still goes through the
+      // byte-range downloader, as a single non-range chunk covering the
+      // whole file -- see downloadChunk's !supportsRange handling).
+      if (job.downloadKind === "byte-range") {
         await this.runByteRangeJob(job, runtime, controller.signal, throttle);
-      } else {
+      } else if (job.downloadKind === "manifest") {
         await this.runManifestOrStreamJob(job, controller.signal);
+      } else {
+        await this.runYtdlpMergeJob(job, controller.signal);
       }
 
       await this.finalizeJob(job, runtime, controller.signal);
@@ -452,6 +500,52 @@ export class QueueManager {
         downloadEvents.emitWsEvent({ type: "job:update", jobId: job.id, payload: job });
       },
     });
+  }
+
+  /** Calls the sniffer-service's /download-merged, which runs yt-dlp
+   * itself to download the best video-only + best audio-only formats and
+   * mux them into job.outputPath directly on the shared filesystem (see
+   * ytdlp_wrapper.download_merged for why no bytes cross this HTTP call).
+   * Like runManifestOrStreamJob, there's no byte-accurate progress to
+   * report -- downloadedBytes stays 0 until finalizeJob reads the real
+   * file size after this resolves.
+   *
+   * Known gap: aborting `signal` here stops the backend from waiting on
+   * the fetch and lets pause()/remove() proceed immediately on this side,
+   * but the sniffer-service has no cancellation wired to client
+   * disconnects -- its yt-dlp subprocess keeps running orphaned until it
+   * finishes naturally. Acceptable for now (a merge job stuck this way is
+   * self-limiting: it exits once yt-dlp completes or its own
+   * YTDLP_DOWNLOAD_TIMEOUT_SECONDS ceiling hits), not fixed here since it
+   * would need the Python endpoint to track and kill its own subprocess
+   * on request cancellation, real additional plumbing. */
+  private async runYtdlpMergeJob(job: DownloadJob, signal: AbortSignal): Promise<void> {
+    downloadEvents.emitWsEvent({
+      type: "job:log",
+      jobId: job.id,
+      payload: { message: "Downloading best video + audio and merging via yt-dlp -- this can take a while" },
+    });
+
+    let res: Response;
+    try {
+      res = await fetch(`${config.snifferServiceUrl}/download-merged`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: job.url, outputPath: job.outputPath }),
+        signal,
+      });
+    } catch (err) {
+      throw new Error(`Could not reach sniffer-service for merge download: ${(err as Error).message}`);
+    }
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`sniffer-service /download-merged returned ${res.status}: ${body.slice(0, 300)}`);
+    }
+    const result = (await res.json()) as { ok: boolean; error: string | null };
+    if (!result.ok) {
+      throw new Error(result.error ?? "yt-dlp merge download failed");
+    }
   }
 
   private async finalizeJob(job: DownloadJob, runtime: JobRuntimeState, signal: AbortSignal): Promise<void> {

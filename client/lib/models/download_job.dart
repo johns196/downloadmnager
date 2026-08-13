@@ -29,6 +29,22 @@ JobSource jobSourceFromString(String value) {
   );
 }
 
+// Backend implementation detail (which of QueueManager's three job
+// execution paths this is) -- the client doesn't currently branch on
+// this, kept only for API-contract parity with types.ts/models.py.
+enum DownloadKind { byteRange, manifest, ytdlpMerge }
+
+DownloadKind downloadKindFromString(String value) {
+  switch (value) {
+    case "byte-range":
+      return DownloadKind.byteRange;
+    case "ytdlp-merge":
+      return DownloadKind.ytdlpMerge;
+    default:
+      return DownloadKind.manifest;
+  }
+}
+
 enum PostProcessAction { remux, transcode, extractAudio }
 
 String postProcessActionToWire(PostProcessAction action) {
@@ -121,6 +137,7 @@ class DownloadJob {
   final JobSource source;
   final MediaKind mediaKind;
   final PostProcessSpec? postProcess;
+  final DownloadKind downloadKind;
 
   const DownloadJob({
     required this.id,
@@ -141,6 +158,7 @@ class DownloadJob {
     required this.source,
     required this.mediaKind,
     required this.postProcess,
+    required this.downloadKind,
   });
 
   double get progress => sizeBytes != null && sizeBytes! > 0 ? downloadedBytes / sizeBytes! : 0;
@@ -165,5 +183,6 @@ class DownloadJob {
         mediaKind: mediaKindFromString(json["mediaKind"] as String),
         postProcess:
             json["postProcess"] != null ? PostProcessSpec.fromJson(json["postProcess"] as Map<String, dynamic>) : null,
+        downloadKind: downloadKindFromString(json["downloadKind"] as String? ?? "byte-range"),
       );
 }

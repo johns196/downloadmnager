@@ -59,6 +59,7 @@ interface DownloadJob {
   source: "manual" | "extension" | "sniffer";
   mediaKind: "file" | "audio" | "video";
   postProcess: PostProcessSpec | null; // set when the job came from a sniff
+  downloadKind: "byte-range" | "manifest" | "ytdlp-merge"; // which QueueManager execution path -- internal, clients don't need to branch on it
 }
 
 interface PostProcessSpec {
@@ -74,7 +75,7 @@ interface PostProcessSpec {
 |--------|--------------------------|-----------------------------------------|-------|
 | GET    | `/jobs`                  | —                                       | list all jobs, newest first |
 | GET    | `/jobs/:id`               | —                                       | single job |
-| POST   | `/jobs`                   | `{ url, filename?, chunks?, mediaKind?, source? }` | enqueue a direct download. `source` defaults to `"manual"`; pass `"extension"` from the browser extension |
+| POST   | `/jobs`                   | `{ url, filename?, chunks?, mediaKind?, source?, postProcess? }` | enqueue a direct download. `source` defaults to `"manual"`; pass `"extension"` from the browser extension |
 | POST   | `/jobs/:id/pause`         | —                                       | |
 | POST   | `/jobs/:id/resume`        | —                                       | |
 | DELETE | `/jobs/:id`                | `?deleteFile=true\|false`               | cancel/remove |
@@ -117,9 +118,10 @@ interface StreamDescriptor {
   resolution: string | null;  // "1920x1080" for video, null for audio-only
   durationSeconds: number | null;
   isAudioOnly: boolean;
+  hasAudio: boolean;          // false = silent video-only stream (common on YouTube above ~360p); distinct from isAudioOnly, which only means "no video track"
   title: string | null;
   thumbnailUrl: string | null;
-  extractor: "yt-dlp" | "network-sniff"; // which path found it
+  extractor: "yt-dlp" | "yt-dlp-merge" | "network-sniff"; // which path found it
 }
 
 interface SniffResult {
@@ -133,6 +135,34 @@ interface SniffResult {
 Sniffer-service internal endpoint: `POST http://127.0.0.1:8788/sniff` with
 `{ "url": string }`, returns `SniffResult`. Backend does not modify the
 shape, it only wraps/proxies.
+
+### "yt-dlp-merge" streams (best-quality video with audio)
+
+Modern YouTube (and often other yt-dlp-supported sites) serve
+high-quality video as a *silent* video-only DASH stream, separate from an
+audio-only one -- true "video+audio in one file" formats are usually
+capped at a low resolution (360p on YouTube). `ytdlp_wrapper.extract()`
+detects this (at least one `hasAudio: false` video stream and at least
+one `isAudioOnly: true` stream) and prepends one synthetic
+`StreamDescriptor` with `extractor: "yt-dlp-merge"`:
+
+- `url` is the **page** URL, not a fetchable stream -- this entry can't
+  be downloaded like any other `StreamDescriptor`.
+- `container` is always `"mp4"`, `isAudioOnly` is `false`, `hasAudio` is
+  `true`.
+
+`POST /sniff/grab` special-cases `extractor === "yt-dlp-merge"`: instead
+of the normal single-URL downloader, it calls the sniffer-service's
+`POST http://127.0.0.1:8788/download-merged` with
+`{ url: pageUrl, outputPath: <absolute path> }`, which runs `yt-dlp -f
+"bv*+ba/b" --merge-output-format mp4` itself and writes the finished,
+muxed file **directly to `outputPath` on the shared filesystem** --
+deliberately not returned as an HTTP response body, since this service
+and the backend always run on the same machine (the same
+native-deployment assumption `--cookies-from-browser` already requires).
+Returns `{ ok: boolean, error: string | null }`. No byte-accurate
+progress is reported during this call; the job's `downloadedBytes` stays
+0 until it completes and the real file size is read.
 
 **Caching**: the backend caches each `SniffResult` per page URL for 5
 minutes (`backend/src/core/sniffer/SnifferClient.ts`) so that a

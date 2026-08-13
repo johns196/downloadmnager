@@ -43,6 +43,14 @@ export interface ChunkState {
   done: boolean;
 }
 
+// Explicit, not inferred from sizeBytes===null: that implicit signal
+// (still used for byte-range vs. everything-else) had no room for a third
+// kind, and guessing a job's execution path from an unrelated field is
+// exactly the kind of fragility worth naming once a real third case shows
+// up. "ytdlp-merge" downloads+muxes video+audio via yt-dlp itself rather
+// than fetching one URL -- see QueueManager.createYtdlpMergeJob.
+export type DownloadKind = "byte-range" | "manifest" | "ytdlp-merge";
+
 export interface DownloadJob {
   id: string;
   url: string;
@@ -62,6 +70,7 @@ export interface DownloadJob {
   source: JobSource;
   mediaKind: MediaKind;
   postProcess: PostProcessSpec | null;
+  downloadKind: DownloadKind;
 }
 
 /** Extra runtime-only state kept alongside a job but not sent to clients
@@ -83,9 +92,10 @@ export interface StreamDescriptor {
   resolution: string | null;
   durationSeconds: number | null;
   isAudioOnly: boolean;
+  hasAudio: boolean;
   title: string | null;
   thumbnailUrl: string | null;
-  extractor: "yt-dlp" | "network-sniff";
+  extractor: "yt-dlp" | "yt-dlp-merge" | "network-sniff";
 }
 
 export interface SniffResult {

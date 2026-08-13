@@ -19,6 +19,10 @@ class StreamDescriptor {
   final String? resolution;
   final double? durationSeconds;
   final bool isAudioOnly;
+  // Distinguishes a real playable audio+video mp4 from a silent
+  // video-only DASH stream -- both are isAudioOnly=false without this.
+  // See sniffer-service/app/models.py for the fuller rationale.
+  final bool hasAudio;
   final String? title;
   final String? thumbnailUrl;
   final String extractor;
@@ -33,6 +37,7 @@ class StreamDescriptor {
     required this.resolution,
     required this.durationSeconds,
     required this.isAudioOnly,
+    required this.hasAudio,
     required this.title,
     required this.thumbnailUrl,
     required this.extractor,
@@ -48,6 +53,7 @@ class StreamDescriptor {
         resolution: json["resolution"] as String?,
         durationSeconds: (json["durationSeconds"] as num?)?.toDouble(),
         isAudioOnly: json["isAudioOnly"] as bool? ?? false,
+        hasAudio: json["hasAudio"] as bool? ?? true,
         title: json["title"] as String?,
         thumbnailUrl: json["thumbnailUrl"] as String?,
         extractor: json["extractor"] as String? ?? "yt-dlp",

@@ -12,6 +12,11 @@ PORT = int(os.environ.get("SNIFFER_PORT", "8788"))
 # 10s in testing, but given real room here since a timeout is treated the
 # same as "not found" by the caller.
 YTDLP_TIMEOUT_SECONDS = 30
+# Actually downloading + merging a video (not just probing its metadata,
+# see YTDLP_TIMEOUT_SECONDS above) can legitimately take minutes for a
+# large/long file on a slow connection -- generous ceiling rather than a
+# tight one, since a false timeout here throws away real progress.
+YTDLP_DOWNLOAD_TIMEOUT_SECONDS = int(os.environ.get("YTDLP_DOWNLOAD_TIMEOUT_SECONDS", "1800"))
 NETWORK_SNIFF_TIMEOUT_SECONDS = 25
 # Time to let an SPA hydrate after DOMContentLoaded before looking for
 # interactive elements (e.g. a play button) or reading document.title --

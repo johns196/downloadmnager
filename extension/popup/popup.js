@@ -112,6 +112,16 @@ function filenameFor(item) {
 function renderStream(stream) {
   const wrap = document.createElement("div");
   wrap.className = "stream";
+  // "yt-dlp-merge" is the synthetic entry ytdlp_wrapper.extract() adds
+  // when a site only offers separate silent-video + audio-only formats
+  // (near-universal on modern YouTube above ~360p) -- grabbing it
+  // downloads+muxes both via yt-dlp itself (QueueManager.
+  // createYtdlpMergeJob), producing one real playable file. Highlighted
+  // and placed first (already prepended by the sniffer) since it's the
+  // answer to "just give me the movie" that every other raw-format entry
+  // below it can't provide alone.
+  const isMerge = stream.extractor === "yt-dlp-merge";
+  if (isMerge) wrap.style.borderLeft = "3px solid #2563eb";
 
   if (stream.title) {
     const titleEl = document.createElement("div");
@@ -122,14 +132,28 @@ function renderStream(stream) {
 
   const label = document.createElement("div");
   label.className = "muted";
-  label.textContent = `${stream.isAudioOnly ? "Audio" : "Video"} · ${stream.container ?? stream.protocol}${
-    stream.resolution ? " · " + stream.resolution : ""
-  }${stream.bitrateKbps ? " · " + Math.round(stream.bitrateKbps) + "kbps" : ""}`;
+  label.textContent = isMerge
+    ? "Best quality · video + audio merged · mp4"
+    : `${stream.isAudioOnly ? "Audio" : "Video"} · ${stream.container ?? stream.protocol}${
+        stream.resolution ? " · " + stream.resolution : ""
+      }${stream.bitrateKbps ? " · " + Math.round(stream.bitrateKbps) + "kbps" : ""}`;
   wrap.appendChild(label);
+
+  // A video-only DASH stream (no acodec at all) downloads as a silent
+  // file -- easy to not notice until playback, so this is called out
+  // explicitly rather than left to the same gray "muted" treatment as
+  // routine metadata.
+  if (!isMerge && !stream.isAudioOnly && !stream.hasAudio) {
+    const warnEl = document.createElement("div");
+    warnEl.textContent = "⚠ no audio -- silent video-only stream";
+    warnEl.style.color = "#f59e0b";
+    warnEl.style.fontSize = "11px";
+    wrap.appendChild(warnEl);
+  }
 
   const downloadBtn = document.createElement("button");
   downloadBtn.className = "btn";
-  downloadBtn.textContent = "Download";
+  downloadBtn.textContent = isMerge ? "Download (best quality)" : "Download";
   downloadBtn.addEventListener("click", () => grab(stream, null));
   wrap.appendChild(downloadBtn);
 
@@ -145,6 +169,18 @@ function renderStream(stream) {
       grab(stream, { action: "extract-audio", targetContainer: "mp3", tags: { title: stream.title ?? undefined } }),
     );
     wrap.appendChild(mp3Btn);
+  }
+
+  // Merge entries are already mp4 -- this is for a raw video format that
+  // came in as webm/mkv/etc and the user wants standardized to mp4.
+  if (!isMerge && !stream.isAudioOnly && stream.container !== "mp4") {
+    const mp4Btn = document.createElement("button");
+    mp4Btn.className = "btn";
+    mp4Btn.textContent = "Convert to MP4";
+    mp4Btn.addEventListener("click", () =>
+      grab(stream, { action: "transcode", targetContainer: "mp4", tags: { title: stream.title ?? undefined } }),
+    );
+    wrap.appendChild(mp4Btn);
   }
 
   return wrap;
