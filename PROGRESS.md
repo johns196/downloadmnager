@@ -847,6 +847,104 @@ apply to every client (extension, Ubuntu/Android/Windows/iOS app) without
 any client-side changes — none of the four apps have their own caching or
 page-load logic that could independently go stale.
 
+## "Still getting the old track" — the real architectural fix (same week)
+
+The two fixes above weren't actually the fix for this symptom, and the
+user proved it: after both shipped, resniffing on Anghami *still* returned
+a stale/unrelated track, and the request that proved it (`?noautoplay=1&
+extras=...`) was a URL the backend had never cached, ruling caching out
+entirely. Root cause, confirmed by directly inspecting a live `/api/sniff`
+response: the network-sniff fallback (`network_interceptor.py`) loads the
+page URL fresh in its **own throwaway headless Chromium instance** — it
+has no connection whatsoever to the user's real, already-open, already-
+logged-in tab. On a normal page that's fine. On an SPA like Anghami, where
+picking another track from "Recommended Songs" plays it via the
+persistent bottom player *without changing the page URL*, the headless
+reload can only ever land on the URL's own canonical song — confirmed by
+the sniff response's `pageTitle` still reading the original song's title
+verbatim, with three unrelated stream URLs (different ISRC codes) that
+matched neither the original track nor whatever the user was actually
+playing. No amount of resniffing was ever going to fix this; it isn't a
+staleness bug, it's a fundamentally different data source than "what's
+playing in your tab right now."
+
+**The real fix uses a mechanism that already existed but was wired to the
+wrong UI.** `background/service-worker.js` has always passively watched
+each tab's actual network traffic (`chrome.webRequest.onCompleted`,
+filtered to media-looking responses) and stored what it finds per-tab in
+`chrome.storage.session`. This runs in the real tab, so it reflects
+whatever the user is truly playing right now, and — since it's only reset
+on a full navigation (`chrome.tabs.onUpdated` "loading"), not an SPA
+in-place track change — it keeps accumulating every track played in one
+session. It was already exposed via a `GET_TAB_MEDIA` message and
+rendered in `popup.js`'s "Detected on page" section, but the **floating
+in-page panel** (`content-script.js`, the "↓" launcher the user actually
+uses, confirmed live in an earlier round) had its own, separate "Detected
+on page" implementation that only scanned the DOM for `<video>/<audio>`
+elements' `src` — which is empty for any player using MediaSource
+Extensions / a `blob:` URL, Anghami included (the code already explicitly
+filters out `blob:` since it's not fetchable outside the page's own JS
+context).
+
+Verified this passive path actually sees Anghami's traffic before
+building anything on top of it (asked the user to check the toolbar
+icon's badge count while a track played — confirmed non-zero), since
+building UI on an unverified assumption would just risk a third "still
+didn't work." With that confirmed:
+
+- `service-worker.js`'s `recordMedia()` now also pushes a
+  `TAB_MEDIA_UPDATED` message straight to that tab's content script on
+  every new detection (`.catch(() => {})` for tabs with nothing injected),
+  not just the badge count — the floating panel is long-lived on the page
+  (unlike a popup, which just re-reads on each open), so it needed a way
+  to learn about new tracks without the user re-clicking anything.
+- `content-script.js`'s panel now renders from that live-pushed/
+  `GET_TAB_MEDIA`-seeded list instead of the local DOM scan. Switching
+  tracks on Anghami now updates the panel automatically.
+- **No reliable track name for these entries** — deliberately left as the
+  filename off the URL, not a title. Checked first: Anghami's `pageTitle`
+  (read via Playwright's `page.title()` in the sniff test above) stayed
+  on the original song throughout, so `chrome.tabs.get(tabId).title` would
+  almost certainly do the same for every entry here — a confidently wrong
+  label is worse than an anonymous one, so it was left out rather than
+  guessed at. Getting a real name would mean scraping Anghami's own
+  now-playing DOM element, which is exactly the kind of site-specific
+  special-casing this project has deliberately avoided everywhere else
+  (see "What this is"). Not done without the user weighing in first.
+- **MP3 conversion extended to this path too** (user asked for it
+  explicitly). This needed real plumbing, not just a UI button:
+  `POST /api/jobs` silently dropped any `postProcess` field from the
+  request body even though `QueueManager.createJob` and the shared
+  finalize-time apply-postProcess step already fully supported it (proven
+  working previously via the separate `/api/sniff/grab` path) — just
+  never wired through this route. Fixed in `jobs.ts`, `api.js`
+  (`createJob` now takes a third `postProcess` arg), and
+  `DOWNLOAD_DIRECT`'s handler in `service-worker.js`. Verified for real,
+  not just by reading the code: created a job via `POST /api/jobs` with
+  `postProcess: {action:"extract-audio", targetContainer:"mp3", tags:
+  {title:"..."}}` against a real external mp3 URL, confirmed the finished
+  file is genuinely re-encoded (`ffprobe` shows `codec_name=mp3`) with the
+  requested ID3 title tag applied, not just silently passed through.
+- Along the way, also fixed the *sniffed-stream* results (the "Streams
+  found" section from the backend's own sniff, separate from this
+  passively-detected section): the "Extract audio (MP3)" button was
+  gated on `!stream.isAudioOnly`, hiding it precisely when a stream is
+  already audio (e.g. Anghami's m4a) — backwards, since that's exactly
+  when a user most wants to convert to mp3. `extractAudio()` in
+  `FFmpegProcessor.ts` uses `-vn`, a safe no-op when there's no video
+  track, so this was just a wrong gate, not a real limitation. Changed to
+  gate on `stream.container !== "mp3"` in both `popup.js` and
+  `content-script.js`, and both now also show the stream's title (fetched
+  by the backend, previously never displayed).
+
+**Scope note**: this whole "know what's actually playing right now" fix
+is browser-extension-only — it depends on `chrome.webRequest` watching a
+real, live browser tab. The Flutter native apps have no equivalent
+capability and never can (they don't run inside a browser), so this does
+NOT extend to "all apps" the way the two fixes in the section above
+legitimately did. Their sniffing is, and remains, the same URL-based
+approach with the same "blind to in-page state" limitation.
+
 ## Suggested next steps, in order
 
 1. ~~Load the extension in a real browser~~ — done, this is what surfaced

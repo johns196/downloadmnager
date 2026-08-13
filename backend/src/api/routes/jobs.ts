@@ -17,13 +17,20 @@ jobsRouter.get("/:id", (req, res) => {
 });
 
 jobsRouter.post("/", async (req, res) => {
-  const { url, filename, chunks, mediaKind, source } = req.body ?? {};
+  const { url, filename, chunks, mediaKind, source, postProcess } = req.body ?? {};
   if (typeof url !== "string" || !url.trim()) {
     return res.status(400).json({ error: "url is required" });
   }
   const resolvedSource: JobSource | undefined = VALID_SOURCES.includes(source) ? source : undefined;
   try {
-    const job = await queueManager.createJob({ url, filename, chunks, mediaKind, source: resolvedSource });
+    const job = await queueManager.createJob({
+      url,
+      filename,
+      chunks,
+      mediaKind,
+      source: resolvedSource,
+      postProcess: postProcess ?? null,
+    });
     res.status(201).json(job);
   } catch (err) {
     res.status(502).json({ error: (err as Error).message });

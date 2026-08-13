@@ -89,29 +89,76 @@
 
   launcher.addEventListener("click", () => {
     panel.classList.toggle("open");
-    if (panel.classList.contains("open")) renderDomMedia();
+    if (panel.classList.contains("open")) refreshDetectedMedia();
   });
 
-  function renderDomMedia() {
-    const items = findDomMedia();
+  // Sourced from the background's passive chrome.webRequest watcher
+  // (recordMedia in service-worker.js), NOT the local <video>/<audio> DOM
+  // scan below -- that scan can only see a real src attribute, but many
+  // players (Anghami included) route playback through a blob: URL that
+  // isn't fetchable outside the page's own JS context, so it never shows
+  // anything there. The network watcher sees the real underlying fetch
+  // regardless of how the player wraps it, and -- critically -- keeps
+  // accumulating as the user plays different tracks in an SPA that never
+  // navigates, which a fresh page-reload sniff structurally cannot do.
+  let detectedMedia = [];
+
+  function renderDetectedMedia() {
     domMediaEl.innerHTML = "";
-    if (items.length === 0) return;
+    if (detectedMedia.length === 0) return;
     const label = document.createElement("div");
     label.className = "muted";
-    label.textContent = "Detected on page:";
+    label.textContent = "Detected on page (play something to populate this):";
     domMediaEl.appendChild(label);
-    for (const item of items) {
-      const btn = document.createElement("button");
-      btn.className = "btn";
-      btn.textContent = `Download ${item.contentType.startsWith("audio") ? "audio" : "video"}`;
-      btn.addEventListener("click", async () => {
-        statusEl.textContent = "Sending to Download Manager...";
-        const res = await sendMessage({ type: "DOWNLOAD_DIRECT", url: item.url });
-        statusEl.textContent = res.ok ? "Queued." : `Error: ${res.error}`;
-      });
-      domMediaEl.appendChild(btn);
+    for (const item of detectedMedia) {
+      const wrap = document.createElement("div");
+      wrap.className = "stream";
+
+      const nameEl = document.createElement("div");
+      const filename = item.url.split("/").pop().split("?")[0] || item.url;
+      nameEl.textContent = filename.length > 45 ? filename.slice(0, 42) + "..." : filename;
+      nameEl.title = item.url;
+      wrap.appendChild(nameEl);
+
+      const downloadBtn = document.createElement("button");
+      downloadBtn.className = "btn";
+      downloadBtn.textContent = `Download ${item.contentType.startsWith("audio") ? "audio" : "video"}`;
+      downloadBtn.addEventListener("click", () => downloadDetected(item, null));
+      wrap.appendChild(downloadBtn);
+
+      const mp3Btn = document.createElement("button");
+      mp3Btn.className = "btn";
+      mp3Btn.textContent = "Convert to MP3";
+      mp3Btn.addEventListener("click", () =>
+        downloadDetected(item, { action: "extract-audio", targetContainer: "mp3" }),
+      );
+      wrap.appendChild(mp3Btn);
+
+      domMediaEl.appendChild(wrap);
     }
   }
+
+  async function downloadDetected(item, postProcess) {
+    statusEl.textContent = "Sending to Download Manager...";
+    const res = await sendMessage({ type: "DOWNLOAD_DIRECT", url: item.url, postProcess });
+    statusEl.textContent = res.ok ? "Queued." : `Error: ${res.error}`;
+  }
+
+  async function refreshDetectedMedia() {
+    const res = await sendMessage({ type: "GET_TAB_MEDIA" });
+    detectedMedia = res.ok ? res.media : [];
+    renderDetectedMedia();
+  }
+
+  // Live push from the background whenever a new item is recorded for this
+  // tab -- means the panel updates the instant a new track's request comes
+  // through, with no need to close/reopen it or click anything.
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message.type === "TAB_MEDIA_UPDATED") {
+      detectedMedia = message.media ?? [];
+      if (panel.classList.contains("open")) renderDetectedMedia();
+    }
+  });
 
   root.querySelector("#sniff-btn").addEventListener("click", async () => {
     statusEl.textContent = "Sniffing (this can take a few seconds)...";
@@ -134,6 +181,14 @@
     for (const stream of streams) {
       const wrap = document.createElement("div");
       wrap.className = "stream";
+
+      if (stream.title) {
+        const titleEl = document.createElement("div");
+        titleEl.textContent = stream.title.length > 70 ? stream.title.slice(0, 67) + "..." : stream.title;
+        titleEl.title = stream.title;
+        wrap.appendChild(titleEl);
+      }
+
       const label = document.createElement("div");
       label.className = "muted";
       label.textContent = `${stream.isAudioOnly ? "Audio" : "Video"} · ${stream.container ?? stream.protocol} ${stream.resolution ? "· " + stream.resolution : ""} ${stream.bitrateKbps ? "· " + Math.round(stream.bitrateKbps) + "kbps" : ""}`;
@@ -145,10 +200,13 @@
       grabBtn.addEventListener("click", () => grab(stream, null));
       wrap.appendChild(grabBtn);
 
-      if (!stream.isAudioOnly) {
+      // See popup.js's renderStream for why this checks container, not
+      // isAudioOnly: ffmpeg's -vn is a safe no-op on audio-only sources, so
+      // an m4a stream (e.g. Anghami) can go straight to mp3 too.
+      if (stream.container !== "mp3") {
         const mp3Btn = document.createElement("button");
         mp3Btn.className = "btn";
-        mp3Btn.textContent = "Extract audio (MP3)";
+        mp3Btn.textContent = stream.isAudioOnly ? "Convert to MP3" : "Extract audio (MP3)";
         mp3Btn.addEventListener("click", () =>
           grab(stream, { action: "extract-audio", targetContainer: "mp3", tags: { title: stream.title ?? undefined } }),
         );

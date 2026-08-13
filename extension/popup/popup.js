@@ -41,22 +41,46 @@ async function renderDomMedia(tabId) {
   domSection.hidden = false;
   domList.innerHTML = "";
   for (const item of items) {
-    const btn = document.createElement("button");
-    btn.className = "btn";
-    btn.textContent = item.url.length > 60 ? item.url.slice(0, 57) + "..." : item.url;
-    btn.title = item.url;
-    btn.addEventListener("click", async () => {
-      statusEl.textContent = "Sending to Download Manager...";
-      const r = await sendMessage({ type: "DOWNLOAD_DIRECT", url: item.url });
-      statusEl.textContent = r.ok ? "Queued." : `Error: ${r.error}`;
-    });
-    domList.appendChild(btn);
+    const wrap = document.createElement("div");
+    wrap.className = "stream";
+
+    const nameEl = document.createElement("div");
+    nameEl.textContent = item.url.length > 60 ? item.url.slice(0, 57) + "..." : item.url;
+    nameEl.title = item.url;
+    wrap.appendChild(nameEl);
+
+    const downloadBtn = document.createElement("button");
+    downloadBtn.className = "btn";
+    downloadBtn.textContent = "Download";
+    downloadBtn.addEventListener("click", () => downloadDetected(item, null));
+    wrap.appendChild(downloadBtn);
+
+    const mp3Btn = document.createElement("button");
+    mp3Btn.className = "btn";
+    mp3Btn.textContent = "Convert to MP3";
+    mp3Btn.addEventListener("click", () => downloadDetected(item, { action: "extract-audio", targetContainer: "mp3" }));
+    wrap.appendChild(mp3Btn);
+
+    domList.appendChild(wrap);
   }
+}
+
+async function downloadDetected(item, postProcess) {
+  statusEl.textContent = "Sending to Download Manager...";
+  const r = await sendMessage({ type: "DOWNLOAD_DIRECT", url: item.url, postProcess });
+  statusEl.textContent = r.ok ? "Queued." : `Error: ${r.error}`;
 }
 
 function renderStream(stream) {
   const wrap = document.createElement("div");
   wrap.className = "stream";
+
+  if (stream.title) {
+    const titleEl = document.createElement("div");
+    titleEl.textContent = stream.title.length > 70 ? stream.title.slice(0, 67) + "..." : stream.title;
+    titleEl.title = stream.title;
+    wrap.appendChild(titleEl);
+  }
 
   const label = document.createElement("div");
   label.className = "muted";
@@ -71,10 +95,14 @@ function renderStream(stream) {
   downloadBtn.addEventListener("click", () => grab(stream, null));
   wrap.appendChild(downloadBtn);
 
-  if (!stream.isAudioOnly) {
+  // Anything not already mp3 -- a video stream (extract its audio track) or
+  // an audio stream in another container like Anghami's m4a -- can go
+  // through ffmpeg's extract-audio action; ffmpeg's -vn flag is a no-op
+  // when there's no video track, so this is safe for audio-only sources.
+  if (stream.container !== "mp3") {
     const mp3Btn = document.createElement("button");
     mp3Btn.className = "btn";
-    mp3Btn.textContent = "Extract audio (MP3)";
+    mp3Btn.textContent = stream.isAudioOnly ? "Convert to MP3" : "Extract audio (MP3)";
     mp3Btn.addEventListener("click", () =>
       grab(stream, { action: "extract-audio", targetContainer: "mp3", tags: { title: stream.title ?? undefined } }),
     );

@@ -32,8 +32,11 @@ async function request(path, options = {}) {
 export const backendApi = {
   health: () => request("/health"),
   listJobs: () => request("/jobs"),
-  createJob: (url, filename) =>
-    request("/jobs", { method: "POST", body: JSON.stringify({ url, filename, source: "extension" }) }),
+  createJob: (url, filename, postProcess) =>
+    request("/jobs", {
+      method: "POST",
+      body: JSON.stringify({ url, filename, source: "extension", postProcess: postProcess ?? null }),
+    }),
   sniff: (url) => request("/sniff", { method: "POST", body: JSON.stringify({ url }) }),
   grab: (url, streamId, postProcess) =>
     request("/sniff/grab", { method: "POST", body: JSON.stringify({ url, streamId, postProcess }) }),

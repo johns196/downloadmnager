@@ -48,6 +48,12 @@ async function recordMedia(tabId, url, contentType) {
   await setTabMediaMap(tabId, map);
   chrome.action.setBadgeText({ tabId, text: String(map.size) });
   chrome.action.setBadgeBackgroundColor({ tabId, color: "#2563eb" });
+  // Push to the tab's own content script too, not just the toolbar popup --
+  // the floating in-page panel has no other way to learn about a new
+  // detection while it's already open (unlike the popup, which re-reads on
+  // every open). Fails silently on tabs with no content script injected
+  // (e.g. a chrome:// page triggering this via an unrelated request).
+  chrome.tabs.sendMessage(tabId, { type: "TAB_MEDIA_UPDATED", media: [...map.values()] }).catch(() => {});
 }
 
 // Plain observation, not blocking -- MV3 removed blocking webRequest for
@@ -94,7 +100,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           break;
         }
         case "DOWNLOAD_DIRECT": {
-          const job = await backendApi.createJob(message.url, message.filename);
+          const job = await backendApi.createJob(message.url, message.filename, message.postProcess ?? null);
           sendResponse({ ok: true, job });
           break;
         }
