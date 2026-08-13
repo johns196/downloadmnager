@@ -44,7 +44,16 @@ async function recordMedia(tabId, url, contentType) {
   if (tabId < 0) return; // not associated with a tab (e.g. service worker's own requests)
   const map = await getTabMediaMap(tabId);
   if (map.has(url)) return;
-  map.set(url, { url, contentType });
+  // Read fresh, right now, rather than once at page load -- chrome.tabs.get
+  // always reflects the tab's current title. Whether that's a per-track
+  // name depends entirely on whether the site updates <title> on in-place
+  // playback changes (unconfirmed for Anghami specifically -- the earlier
+  // network-sniff test only ever saw the page's title on cold load, never
+  // after a live track switch). Worst case every entry shares one title,
+  // identical to the old sniff-based behavior the user asked to match;
+  // best case it's actually correct per track. Either way, not a regression.
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  map.set(url, { url, contentType, title: tab?.title ?? null });
   await setTabMediaMap(tabId, map);
   chrome.action.setBadgeText({ tabId, text: String(map.size) });
   chrome.action.setBadgeBackgroundColor({ tabId, color: "#2563eb" });

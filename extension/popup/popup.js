@@ -47,7 +47,14 @@ async function renderDomMedia(tabId) {
     const wrap = document.createElement("div");
     wrap.className = "stream";
 
+    if (item.title) {
+      const titleEl = document.createElement("div");
+      titleEl.textContent = item.title.length > 60 ? item.title.slice(0, 57) + "..." : item.title;
+      titleEl.title = item.title;
+      wrap.appendChild(titleEl);
+    }
     const nameEl = document.createElement("div");
+    nameEl.className = "muted";
     nameEl.textContent = item.url.length > 60 ? item.url.slice(0, 57) + "..." : item.url;
     nameEl.title = item.url;
     wrap.appendChild(nameEl);
@@ -70,8 +77,31 @@ async function renderDomMedia(tabId) {
 
 async function downloadDetected(item, postProcess) {
   statusEl.textContent = "Sending to Download Manager...";
-  const r = await sendMessage({ type: "DOWNLOAD_DIRECT", url: item.url, postProcess });
+  const r = await sendMessage({ type: "DOWNLOAD_DIRECT", url: item.url, filename: filenameFor(item), postProcess });
   statusEl.textContent = r.ok ? "Queued." : `Error: ${r.error}`;
+}
+
+// Same rule as the backend's own sanitizeFilename (QueueManager.ts), so a
+// title-derived name here matches what sniffed-stream downloads already
+// produce -- without this, the backend falls back to deriving a filename
+// from the CDN URL itself, which for Anghami is an opaque ISRC/MD5 hash.
+//
+// Hash suffix is load-bearing -- see content-script.js's filenameFor for
+// why: a static <title> across tracks would otherwise collide different
+// songs onto the same filename, which uniqueOutputPath() would then save
+// as indistinguishable "(1)"/"(2)" duplicates.
+function shortHash(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+
+function filenameFor(item) {
+  if (!item.title) return undefined;
+  const urlExt = (item.url.split("?")[0].split(".").pop() || "").toLowerCase();
+  const ext = /^[a-z0-9]{2,5}$/.test(urlExt) ? urlExt : "bin";
+  const safeName = item.title.replace(/[/\\?%*:|"<>]/g, "_").trim().slice(0, 150) || "media";
+  return `${safeName} [${shortHash(item.url)}].${ext}`;
 }
 
 function renderStream(stream) {

@@ -127,8 +127,15 @@
       const wrap = document.createElement("div");
       wrap.className = "stream";
 
-      const nameEl = document.createElement("div");
       const filename = item.url.split("/").pop().split("?")[0] || item.url;
+      if (item.title) {
+        const titleEl = document.createElement("div");
+        titleEl.textContent = item.title.length > 60 ? item.title.slice(0, 57) + "..." : item.title;
+        titleEl.title = item.title;
+        wrap.appendChild(titleEl);
+      }
+      const nameEl = document.createElement("div");
+      nameEl.className = "muted";
       nameEl.textContent = filename.length > 45 ? filename.slice(0, 42) + "..." : filename;
       nameEl.title = item.url;
       wrap.appendChild(nameEl);
@@ -151,9 +158,42 @@
     }
   }
 
+  // Without this, the backend derives a filename straight from the CDN
+  // URL's own path -- fine for a normal file server, but Anghami's audio
+  // URLs are opaque ISRC/MD5 hashes with no readable name in them at all,
+  // which is exactly what was cluttering the Library screen. Same
+  // sanitize rule as the backend's own sanitizeFilename (QueueManager.ts)
+  // so results match what sniffed-stream downloads already produce.
+  //
+  // The hash suffix is load-bearing, not decoration: if the site's <title>
+  // turns out to be static across tracks (unconfirmed either way for
+  // Anghami -- see recordMedia's comment in service-worker.js), every
+  // detected item would otherwise resolve to the *same* filename, and
+  // uniqueOutputPath() would silently save different songs as "name
+  // (1).m4a", "name (2).m4a" -- indistinguishable duplicates, which is
+  // worse than the ugly-but-unique hash names this is meant to replace.
+  function shortHash(str) {
+    let h = 0;
+    for (let i = 0; i < str.length; i++) h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
+    return (h >>> 0).toString(36);
+  }
+
+  function filenameFor(item) {
+    if (!item.title) return undefined; // no title captured -- let the backend derive one from the URL, as before
+    const urlExt = (item.url.split("?")[0].split(".").pop() || "").toLowerCase();
+    const ext = /^[a-z0-9]{2,5}$/.test(urlExt) ? urlExt : "bin";
+    const safeName = item.title.replace(/[/\\?%*:|"<>]/g, "_").trim().slice(0, 150) || "media";
+    return `${safeName} [${shortHash(item.url)}].${ext}`;
+  }
+
   async function downloadDetected(item, postProcess) {
     statusEl.textContent = "Sending to Download Manager...";
-    const res = await sendMessage({ type: "DOWNLOAD_DIRECT", url: item.url, postProcess });
+    const res = await sendMessage({
+      type: "DOWNLOAD_DIRECT",
+      url: item.url,
+      filename: filenameFor(item),
+      postProcess,
+    });
     statusEl.textContent = res.ok ? "Queued." : `Error: ${res.error}`;
   }
 

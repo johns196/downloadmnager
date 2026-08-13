@@ -962,6 +962,55 @@ NOT extend to "all apps" the way the two fixes in the section above
 legitimately did. Their sniffing is, and remains, the same URL-based
 approach with the same "blind to in-page state" limitation.
 
+## Naming and delete-from-Library (same week, immediate follow-up)
+
+User feedback after the live-detection feature above landed: sniffing
+itself finally worked, but (1) detected-item names were opaque CDN hashes
+("naming is weird, should be like the one before") and (2) no way to
+delete a completed download from the Library screen, specifically to
+clear out duplicate files created while testing.
+
+1. **Title capture for detected items.** `recordMedia()` in
+   `service-worker.js` now calls `chrome.tabs.get(tabId)` fresh at the
+   moment each item is recorded (not once at page load) and stores
+   `tab.title` alongside the url/contentType. Deliberately not proven to
+   be per-track accurate on Anghami specifically — the earlier sniff
+   test's `pageTitle` only ever showed a static value, and that's still
+   the only direct evidence available. Shipped anyway because the
+   downside is bounded: worst case (title genuinely doesn't change per
+   track) every entry shares one title, which is exactly the old
+   single-title-per-sniff behavior the user asked to match — not a
+   regression either way.
+2. **Saved filenames now use the title too, with a mandatory uniqueness
+   suffix.** Caught in review before shipping: if that title *is* static
+   across tracks, naively using it as the filename would make different
+   songs collide onto the same name, and `uniqueOutputPath()` would save
+   them as indistinguishable "Song (1).m4a" / "Song (2).m4a" — strictly
+   worse than the ugly-but-unique hash names, since at least those were
+   traceable back to distinct URLs. Fixed by appending a short non-crypto
+   hash of the source URL to every generated filename (`shortHash()` in
+   both `content-script.js` and `popup.js`) — readable title, guaranteed
+   unique regardless of what the title turns out to be.
+3. **Delete button added to `LibraryScreen`** (`client/lib/screens/
+   library_screen.dart`) — it never had one, only a play/open button,
+   confirmed from the screenshot the user sent matching this screen
+   exactly. Backend delete (`DELETE /api/jobs/:id?deleteFile=true`) and
+   `DownloadStore.remove()` already existed and needed no changes; this
+   was purely a missing UI affordance. Added with a confirmation dialog
+   (irreversible, deletes the real file) and `deleteFile: true` by
+   default — deliberately different from `DownloadCard`'s generic remove
+   button (which keeps a completed file on disk), since Library entries
+   are files the user is actively browsing and the motivating case was
+   explicitly "let me delete the duplicate files," not just clear a list
+   entry. `flutter analyze` clean; **not yet clicked by the user** — the
+   rebuilt `.deb` needs installing first (`sudo dpkg -i client/dist/
+   download-manager-client_0.1.0_amd64.deb`).
+4. **Existing duplicate files in the Library don't rename themselves** —
+   the new title-based naming only applies to downloads made after this
+   change. The pre-existing "(1)" through "(5)" duplicates the user saw
+   still have their old CDN-hash names; the new delete button is how to
+   clear those, not a retroactive rename.
+
 ## Suggested next steps, in order
 
 1. ~~Load the extension in a real browser~~ — done, this is what surfaced
