@@ -40,7 +40,10 @@ async function renderDomMedia(tabId) {
   }
   domSection.hidden = false;
   domList.innerHTML = "";
-  for (const item of items) {
+  // Newest first -- see content-script.js's renderDetectedMedia for why
+  // (accumulates every track played this session on an SPA, so insertion
+  // order would put the *first* track played on top, not the current one).
+  for (const item of [...items].reverse()) {
     const wrap = document.createElement("div");
     wrap.className = "stream";
 

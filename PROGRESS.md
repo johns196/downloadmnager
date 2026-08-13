@@ -937,6 +937,23 @@ didn't work." With that confirmed:
   `content-script.js`, and both now also show the stream's title (fetched
   by the backend, previously never displayed).
 
+**Two bugs caught in review before shipping, both would have reproduced
+the exact symptom this feature exists to fix:**
+1. `recordMedia` only clears its per-tab map on a full page navigation, so
+   on an SPA it accumulates every track played this session in insertion
+   order — rendering that order unreversed put the *first* track played
+   at the top (the easiest entry to click), not the current one. Fixed by
+   reversing before rendering in both `content-script.js` and `popup.js`,
+   with the UI honest about the fact that Anghami specifically preloads a
+   next-queued track alongside the current one (seen in the earlier sniff
+   test's three distinct ISRCs), so it's framed as "last one or two" being
+   current/next, not a guaranteed single answer.
+2. The floating panel's empty-state returned before appending its hint
+   text — meaning after the required extension+tab reload (which resets
+   the newly-empty map), the panel would render as blank with no
+   explanation, indistinguishable from the old broken version. Fixed to
+   always render a status line, empty or not.
+
 **Scope note**: this whole "know what's actually playing right now" fix
 is browser-extension-only — it depends on `chrome.webRequest` watching a
 real, live browser tab. The Flutter native apps have no equivalent

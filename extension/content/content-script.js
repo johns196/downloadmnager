@@ -105,12 +105,25 @@
 
   function renderDetectedMedia() {
     domMediaEl.innerHTML = "";
-    if (detectedMedia.length === 0) return;
     const label = document.createElement("div");
     label.className = "muted";
-    label.textContent = "Detected on page (play something to populate this):";
+    if (detectedMedia.length === 0) {
+      label.textContent = "Detected on page: nothing yet -- play something.";
+      domMediaEl.appendChild(label);
+      return;
+    }
+    // Newest first, and said plainly: recordMedia only clears on a full
+    // page navigation, so on an SPA that never navigates (Anghami) this
+    // list accumulates every track played this session in insertion
+    // order. Without reversing, the top (and easiest to click) entry
+    // would always be the *first* thing played, not the current track --
+    // exactly the "still getting the old one" bug this whole feature
+    // exists to fix. The Anghami sniff test earlier also showed it
+    // preloads the *next* queued track alongside the current one, so
+    // "last couple" is the honest framing, not "last one is definitely it".
+    label.textContent = "Detected on page (last one or two are most likely current/next):";
     domMediaEl.appendChild(label);
-    for (const item of detectedMedia) {
+    for (const item of [...detectedMedia].reverse()) {
       const wrap = document.createElement("div");
       wrap.className = "stream";
 
