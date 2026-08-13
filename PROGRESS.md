@@ -1138,21 +1138,45 @@ ambiguity left to label since duplicates never make it into the list.
 Removed the now-dead ambiguous/ranking logic from `content-script.js` and
 `popup.js` entirely rather than leaving it unreachable.
 
-**Known tradeoffs of filtering at the title level**, worth knowing before
-assuming a missing item elsewhere is a bug:
-- The earlier "audio + unrelated promo video" case (`AnghamiPlusFeatures-
-  NEW-NoAdsENG.mp4`) shared a title with whatever track was playing when
-  it loaded -- it's now silently dropped by this same filter, same as a
-  prefetched next-track would be. Likely desirable here, but it means any
-  genuinely different media loading under a title already seen vanishes
-  without a trace, not just Anghami's specific prefetch case.
+**Update**: the title-only version of this filter created a new bug --
+reported by the user and fixed same-day, see "Dedup scoped to (title,
+kind)" below. The tradeoffs as now shipped:
 - A non-SPA page with one static, never-changing title but several
-  distinct embedded media items (a gallery/playlist-style page) will now
-  only ever surface the *first* item detected -- everything else under
-  that same unchanging title gets dropped. This wasn't a problem for
+  distinct embedded items of the *same* kind (e.g. two different videos,
+  no title change between them) will only ever surface the *first* one of
+  that kind -- everything else of that kind under the same unchanging
+  title gets dropped. One video + one audio under the same static title
+  both still get through (different kinds). This wasn't a problem for
   Anghami/YouTube/Dailymotion (titles change per item), but if a future
   site shows fewer detected items than expected, check whether its title
   is actually changing per media item before assuming something broke.
+
+## Dedup scoped to (title, kind), not title alone
+
+Same-day follow-up: the title-only dedup above (first item under a title
+wins, later ones dropped) had a real gap the user hit -- if the unrelated
+promo video (`AnghamiPlusFeatures-NEW-NoAdsENG.mp4`) happened to load
+*before* the actual track's audio under the same title, it permanently
+claimed that title slot and the real song's audio was silently dropped,
+never shown at all. Title-only dedup can't tell "this is a duplicate of
+the same thing" apart from "this is a different thing that happens to
+share a title right now" -- exactly the promo-video case.
+
+Fix: `mediaKindOf(url, contentType)` in `service-worker.js` classifies
+each item as `audio`/`video`/`other` (content-type first, URL extension
+as fallback for CDNs that misreport it), and the dedup key in
+`recordMedia()` is now `(title, kind)` instead of `title` alone. A video
+loading under a title no longer blocks audio under that same title, or
+vice versa -- the original prefetch bug is still caught, since both the
+real track and the prefetched next-track's audio share the "audio" kind.
+
+**Open question, not yet resolved**: the promo video itself still shows
+up as its own entry now (unblocked, same as before this whole
+investigation started) -- reintroducing the original "why 2 entries per
+song" question, just with the real audio now actually present alongside
+it instead of missing. Asked the user whether to filter
+`AnghamiPlusFeatures`-style promo clips out entirely (site-specific, so
+not done without asking) or leave them visible.
 
 ## Suggested next steps, in order
 

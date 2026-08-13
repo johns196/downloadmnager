@@ -26,18 +26,38 @@ async function setTabMediaMap(tabId, map) {
   await chrome.storage.session.set({ [storageKey(tabId)]: Object.fromEntries(map) });
 }
 
+function urlPath(url) {
+  try {
+    return new URL(url).pathname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
 function looksLikeMedia(url, contentType) {
-  const path = (() => {
-    try {
-      return new URL(url).pathname.toLowerCase();
-    } catch {
-      return "";
-    }
-  })();
+  const path = urlPath(url);
   if (MEDIA_EXTENSIONS.some((ext) => path.endsWith(ext))) return true;
   if (contentType && (contentType.startsWith("video/") || contentType.startsWith("audio/"))) return true;
   if (contentType && (contentType.includes("mpegurl") || contentType.includes("dash+xml"))) return true;
   return false;
+}
+
+const AUDIO_EXTENSIONS = [".m4a", ".mp3", ".aac", ".flac", ".wav", ".ogg"];
+const VIDEO_EXTENSIONS = [".mp4", ".webm", ".m3u8", ".mpd"];
+
+// Coarse audio/video split used only to scope the title-dedup below --
+// content-type is checked first since it's authoritative when present,
+// falling back to the URL extension for responses that omit or misreport
+// it (seen in practice: some CDNs serve audio as application/octet-stream).
+function mediaKindOf(url, contentType) {
+  if (contentType?.startsWith("audio/")) return "audio";
+  if (contentType?.startsWith("video/") || contentType?.includes("mpegurl") || contentType?.includes("dash+xml")) {
+    return "video";
+  }
+  const path = urlPath(url);
+  if (AUDIO_EXTENSIONS.some((ext) => path.endsWith(ext))) return "audio";
+  if (VIDEO_EXTENSIONS.some((ext) => path.endsWith(ext))) return "video";
+  return "other";
 }
 
 async function recordMedia(tabId, url, contentType) {
@@ -58,17 +78,30 @@ async function recordMedia(tabId, url, contentType) {
   // given title is the real, current track; anything that shows up later
   // under that *same* title is Anghami prefetching the next queued song's
   // audio ahead of time, before its own title has taken over the tab. So
-  // once a title has one entry, later ones under it are dropped rather
-  // than kept as an ambiguous duplicate to flag.
+  // once a title has an entry of a given kind, later ones of that same
+  // kind under it are dropped rather than kept as an ambiguous duplicate.
+  //
+  // Scoped to (title, kind) rather than title alone -- found in practice:
+  // an unrelated promo video (Anghami's own "Plus / No Ads" upsell clip)
+  // can load under the same title as the actual track, and if it happens
+  // to arrive first it would otherwise permanently claim that title and
+  // silently block the real audio from ever being recorded. Splitting by
+  // audio vs video means a video claiming a title doesn't block audio
+  // under that same title, and vice versa -- the original prefetch case
+  // (two audio items racing under one title) is still caught, since both
+  // of those share the "audio" kind.
   //
   // Tradeoff worth knowing if this ever misbehaves on a different site:
   // this assumes a title change roughly tracks "a new piece of media" --
   // true for the per-track-updating SPAs this was built against, but a
-  // page with one static title and several genuinely distinct embedded
-  // media items (no title changes at all) would only ever keep the first
-  // one found. No `null`-title collision, at least: untitled items always
-  // still get through the check below.
-  if (title && [...map.values()].some((m) => m.title === title)) return;
+  // page with one static title and several distinct embedded items of the
+  // *same* kind (e.g. two different videos, no title change between them)
+  // would only ever keep the first one found. No `null`-title collision,
+  // at least: untitled items always still get through the check below.
+  if (title) {
+    const kind = mediaKindOf(url, contentType);
+    if ([...map.values()].some((m) => m.title === title && mediaKindOf(m.url, m.contentType) === kind)) return;
+  }
   map.set(url, { url, contentType, title });
   await setTabMediaMap(tabId, map);
   chrome.action.setBadgeText({ tabId, text: String(map.size) });
