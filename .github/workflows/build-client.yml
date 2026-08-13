@@ -97,17 +97,18 @@ jobs:
           if-no-files-found: error
 
   build-ios:
-    # Compile-check only, deliberately not a real distributable build --
-    # see PROGRESS.md "iOS" for why. iOS enforces code signing at the OS
-    # level; there is no unsigned-but-runnable equivalent to Windows's
-    # "click through SmartScreen" or Android's sideload-an-APK. Actually
-    # installing on a device needs an Apple Developer Program membership
-    # (TestFlight/App Store) or a free Apple ID (self-signed, 7-day
-    # expiry, one physical device, needs Xcode on the installer's own
-    # Mac) -- both are the user's account/cost decision, not something to
-    # set up unprompted. This job only confirms the Dart/Flutter code
-    # itself is iOS-compatible, the same kind of check `flutter analyze`
-    # already does for the other platforms.
+    # Produces an *unsigned* .ipa -- not a real distributable build, see
+    # PROGRESS.md "iOS" for the full why. iOS enforces code signing at
+    # the OS level; there is no unsigned-but-runnable equivalent to
+    # Windows's "click through SmartScreen" or Android's
+    # sideload-an-APK. This artifact will NOT install on a real device
+    # as-is. It exists so it can be fed into a free-Apple-ID sideloading
+    # tool (e.g. Sideloadly, AltStore) that does its own signing using
+    # the user's own Apple ID -- that signing step has to happen on the
+    # user's machine with their own credentials, never here. A real
+    # Apple Developer Program membership ($99/year) would allow proper
+    # CI-side signing instead (TestFlight/ad-hoc) -- not set up, needs
+    # the user's account/cost decision first.
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -121,3 +122,15 @@ jobs:
         run: flutter pub get
       - working-directory: client
         run: flutter build ios --release --no-codesign
+      - name: Package unsigned .ipa
+        working-directory: client
+        run: |
+          mkdir -p ipa-build/Payload
+          cp -r build/ios/iphoneos/Runner.app ipa-build/Payload/
+          cd ipa-build
+          zip -r ../download-manager-client-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: download-manager-client-ios-unsigned
+          path: client/download-manager-client-unsigned.ipa
+          if-no-files-found: error
