@@ -53,7 +53,23 @@ async function recordMedia(tabId, url, contentType) {
   // identical to the old sniff-based behavior the user asked to match;
   // best case it's actually correct per track. Either way, not a regression.
   const tab = await chrome.tabs.get(tabId).catch(() => null);
-  map.set(url, { url, contentType, title: tab?.title ?? null });
+  const title = tab?.title ?? null;
+  // User-confirmed, twice, on Anghami: the first item recorded under a
+  // given title is the real, current track; anything that shows up later
+  // under that *same* title is Anghami prefetching the next queued song's
+  // audio ahead of time, before its own title has taken over the tab. So
+  // once a title has one entry, later ones under it are dropped rather
+  // than kept as an ambiguous duplicate to flag.
+  //
+  // Tradeoff worth knowing if this ever misbehaves on a different site:
+  // this assumes a title change roughly tracks "a new piece of media" --
+  // true for the per-track-updating SPAs this was built against, but a
+  // page with one static title and several genuinely distinct embedded
+  // media items (no title changes at all) would only ever keep the first
+  // one found. No `null`-title collision, at least: untitled items always
+  // still get through the check below.
+  if (title && [...map.values()].some((m) => m.title === title)) return;
+  map.set(url, { url, contentType, title });
   await setTabMediaMap(tabId, map);
   chrome.action.setBadgeText({ tabId, text: String(map.size) });
   chrome.action.setBadgeBackgroundColor({ tabId, color: "#2563eb" });

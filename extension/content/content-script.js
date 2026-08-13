@@ -118,35 +118,24 @@
     // order. Without reversing, the top (and easiest to click) entry
     // would always be the *first* thing played, not the current track --
     // exactly the "still getting the old one" bug this whole feature
-    // exists to fix. The Anghami sniff test earlier also showed it
-    // preloads the *next* queued track alongside the current one, so
-    // "last couple" is the honest framing, not "last one is definitely it".
-    label.textContent = "Detected on page (last one or two are most likely current/next):";
+    // exists to fix.
+    //
+    // No same-title duplicates reach this point at all -- recordMedia
+    // (service-worker.js) already drops any later item sharing a title
+    // with one already recorded, per the user's confirmed finding that a
+    // repeat under an existing title is Anghami prefetching the next
+    // track, not a second copy of the current one.
+    label.textContent = "Detected on page:";
     domMediaEl.appendChild(label);
-    // Confirmed by the user actually downloading and listening: when two
-    // entries share an identical title, one of them can genuinely be a
-    // *different* track (Anghami appears to prefetch an upcoming queued
-    // song's audio before its own title has taken over the tab), so the
-    // repeated title is not corroboration -- it's the exact case where the
-    // title-capture in recordMedia (service-worker.js) is caught mid-
-    // transition and wrong. No reliable signal here for *which* of a
-    // group is the stale/wrong one, so every member of a repeated-title
-    // group gets flagged rather than silently trusting any of them.
-    const titleCounts = new Map();
-    for (const m of detectedMedia) if (m.title) titleCounts.set(m.title, (titleCounts.get(m.title) || 0) + 1);
     for (const item of [...detectedMedia].reverse()) {
       const wrap = document.createElement("div");
       wrap.className = "stream";
 
       const filename = item.url.split("/").pop().split("?")[0] || item.url;
       if (item.title) {
-        const ambiguous = titleCounts.get(item.title) > 1;
         const titleEl = document.createElement("div");
-        const shortTitle = item.title.length > 60 ? item.title.slice(0, 57) + "..." : item.title;
-        titleEl.textContent = ambiguous ? `${shortTitle} (unconfirmed)` : shortTitle;
-        titleEl.title = ambiguous
-          ? `${item.title}\n\nThis title is shared by more than one detected file -- could be a different, prefetched track under the same label. Check the downloaded file before trusting the name.`
-          : item.title;
+        titleEl.textContent = item.title.length > 60 ? item.title.slice(0, 57) + "..." : item.title;
+        titleEl.title = item.title;
         wrap.appendChild(titleEl);
       }
       const nameEl = document.createElement("div");
@@ -197,14 +186,8 @@
     if (!item.title) return undefined; // no title captured -- let the backend derive one from the URL, as before
     const urlExt = (item.url.split("?")[0].split(".").pop() || "").toLowerCase();
     const ext = /^[a-z0-9]{2,5}$/.test(urlExt) ? urlExt : "bin";
-    // Same ambiguity check as renderDetectedMedia -- a repeated title can
-    // be a genuinely different (prefetched) track, confirmed by the user
-    // downloading one and checking. The hash already guarantees the file
-    // won't collide with the other one sharing this title; this just keeps
-    // the saved filename from asserting a name that later turns out wrong.
-    const ambiguous = detectedMedia.filter((m) => m.title === item.title).length > 1;
     const safeName = item.title.replace(/[/\\?%*:|"<>]/g, "_").trim().slice(0, 150) || "media";
-    return `${safeName}${ambiguous ? " (unconfirmed)" : ""} [${shortHash(item.url)}].${ext}`;
+    return `${safeName} [${shortHash(item.url)}].${ext}`;
   }
 
   async function downloadDetected(item, postProcess) {

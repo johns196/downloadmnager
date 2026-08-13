@@ -1107,6 +1107,53 @@ candidate, not just reading a timestamp), not another guess from a single
 example. Flagging both and letting the user check the downloaded file
 (as they've done successfully twice now) is the honest ceiling here.
 
+## Correction: the "opposite result" was a misreading, not a new data point
+
+The revert above turns out to have been based on a misunderstanding, not
+genuine conflicting evidence. When the user said "the first one is good,
+not the one later," they meant it exactly the same way as their original
+report ("first one is the right one, the second one is fetching the next
+song") -- **first/second in fetch order**, i.e. the earliest detection
+under a title is correct and anything detected under that same title
+afterward ("starts after some time") is the next-track prefetch. That is
+one consistent finding stated twice, not two conflicting ones.
+
+The actual error was in how the ranking round above (`Best-guess ranking
+for ambiguous titles`) read the *first* report: it interpreted the
+confirmed-correct file as the *chronologically later* detection (based on
+its position in the newest-first-rendered UI list) and built the "later
+one is likely correct" heuristic on that basis -- backwards. So when the
+user repeated the same finding using time-based language ("starts after
+some time"), it read as a second, contradicting case and got reverted
+instead of corrected. The "two data points pointing in opposite
+directions" conclusion in the revert section above is wrong; there was
+only ever one direction, described consistently both times.
+
+**Real fix, now implemented**: `recordMedia()` in `service-worker.js`
+drops any item whose title matches one already recorded for that tab --
+the first detection under a title wins, later ones sharing that title are
+discarded outright rather than kept and flagged. This replaces both the
+flat "(unconfirmed)" labeling and the reverted ranking; there is no
+ambiguity left to label since duplicates never make it into the list.
+Removed the now-dead ambiguous/ranking logic from `content-script.js` and
+`popup.js` entirely rather than leaving it unreachable.
+
+**Known tradeoffs of filtering at the title level**, worth knowing before
+assuming a missing item elsewhere is a bug:
+- The earlier "audio + unrelated promo video" case (`AnghamiPlusFeatures-
+  NEW-NoAdsENG.mp4`) shared a title with whatever track was playing when
+  it loaded -- it's now silently dropped by this same filter, same as a
+  prefetched next-track would be. Likely desirable here, but it means any
+  genuinely different media loading under a title already seen vanishes
+  without a trace, not just Anghami's specific prefetch case.
+- A non-SPA page with one static, never-changing title but several
+  distinct embedded media items (a gallery/playlist-style page) will now
+  only ever surface the *first* item detected -- everything else under
+  that same unchanging title gets dropped. This wasn't a problem for
+  Anghami/YouTube/Dailymotion (titles change per item), but if a future
+  site shows fewer detected items than expected, check whether its title
+  is actually changing per media item before assuming something broke.
+
 ## Suggested next steps, in order
 
 1. ~~Load the extension in a real browser~~ — done, this is what surfaced
