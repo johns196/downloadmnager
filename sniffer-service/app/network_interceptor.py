@@ -63,9 +63,97 @@ async def _looks_drm_protected(body_text: str) -> bool:
     return any(marker.lower() in body_text.lower() for marker in DRM_MARKERS)
 
 
+def _base_domain(page_url: str) -> str:
+    host = urlparse(page_url).hostname or ""
+    parts = host.split(".")
+    return ".".join(parts[-2:]) if len(parts) >= 2 else host
+
+
+def _extract_cookies_for_domain(page_url: str) -> tuple[list[dict], Optional[str]]:
+    """Returns (playwright_cookies, warning). A cookie-less context can
+    never get past a login wall even when the user is logged in in their
+    own real browser -- see config.py NETWORK_SNIFF_COOKIES_FROM_BROWSER.
+    Reuses yt-dlp's own cookie-extraction/decryption rather than adding a
+    separate dependency."""
+    if not config.NETWORK_SNIFF_COOKIES_FROM_BROWSER:
+        return [], None
+    try:
+        import yt_dlp.cookies as ytdlp_cookies
+    except ImportError:
+        return [], None
+
+    base_domain = _base_domain(page_url)
+    if not base_domain:
+        return [], None
+
+    try:
+        jar = ytdlp_cookies.extract_cookies_from_browser(config.NETWORK_SNIFF_COOKIES_FROM_BROWSER)
+    except Exception as err:
+        return [], f"Could not read cookies from {config.NETWORK_SNIFF_COOKIES_FROM_BROWSER}: {err}"
+
+    cookies = []
+    for cookie in jar:
+        domain = cookie.domain.lstrip(".")
+        if domain != base_domain and not domain.endswith(f".{base_domain}"):
+            continue
+        entry = {
+            "name": cookie.name,
+            "value": cookie.value or "",
+            "domain": cookie.domain,
+            "path": cookie.path or "/",
+            "secure": bool(cookie.secure),
+        }
+        # Playwright rejects anything but -1 or a positive Unix timestamp
+        # in *seconds*. Some cookies come back from yt-dlp's extraction
+        # with `expires` still in Chrome's internal epoch (microseconds
+        # since 1601-01-01) rather than converted Unix seconds -- e.g.
+        # 13465644362561492, which is ~17 digits and would place the
+        # cookie's expiry somewhere around the 15th century as a literal
+        # Unix timestamp. A sane upper bound (year 2100) catches these;
+        # omitting `expires` entirely just makes Playwright treat the
+        # cookie as session-only, which is harmless here since these live
+        # only for the duration of one sniff, not a persisted session.
+        _MAX_SANE_EXPIRES = 4102444800  # 2100-01-01 UTC
+        if isinstance(cookie.expires, (int, float)) and 0 < cookie.expires <= _MAX_SANE_EXPIRES:
+            entry["expires"] = cookie.expires
+        cookies.append(entry)
+    return cookies, None
+
+
+async def _try_trigger_playback(page) -> None:
+    """Best-effort: many sites don't request audio/video segments until
+    playback is actually triggered by user interaction -- this fallback
+    exists for arbitrary sites, not just one, so these are generic
+    heuristics rather than a site-specific selector. Every failure here
+    is silently swallowed; this is a bonus attempt, not a requirement."""
+    try:
+        await page.evaluate(
+            "document.querySelectorAll('video,audio').forEach(el => el.play().catch(() => {}))"
+        )
+    except Exception:
+        pass
+
+    for selector in (
+        'button[aria-label="Play" i]',
+        '[aria-label*="play" i]:not([aria-label*="playlist" i])',
+        'button:has-text("Play")',
+    ):
+        try:
+            locator = page.locator(selector).first
+            if await locator.count() > 0:
+                await locator.click(timeout=3000)
+                break
+        except Exception:
+            continue
+
+
 async def sniff_network(page_url: str) -> tuple[list[StreamDescriptor], list[str], Optional[str]]:
     warnings: list[str] = []
     found: dict[str, dict] = {}  # keyed by url to dedupe
+
+    cookies, cookie_warning = _extract_cookies_for_domain(page_url)
+    if cookie_warning:
+        warnings.append(cookie_warning)
 
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
@@ -73,6 +161,8 @@ async def sniff_network(page_url: str) -> tuple[list[StreamDescriptor], list[str
             user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/124.0 Safari/537.36 DownloadManagerSniffer/0.1"
         )
+        if cookies:
+            await context.add_cookies(cookies)
         page = await context.new_page()
 
         async def on_response(response):
@@ -102,6 +192,7 @@ async def sniff_network(page_url: str) -> tuple[list[StreamDescriptor], list[str
         try:
             await page.goto(page_url, wait_until="networkidle", timeout=config.NETWORK_SNIFF_TIMEOUT_SECONDS * 1000)
             page_title = await page.title()
+            await _try_trigger_playback(page)
             # Media often only starts requesting segments once a player
             # mounts / autoplay kicks in; give it a short extra window.
             await asyncio.sleep(config.NETWORK_SNIFF_IDLE_WAIT_SECONDS)

@@ -48,3 +48,14 @@ YTDLP_POT_SERVER_BASE_URL = os.environ.get("YTDLP_POT_SERVER_BASE_URL", "")
 #    fine if the system Node is already >= 22).
 _local_node = Path(__file__).resolve().parent.parent / ".local-node" / "bin" / "node"
 YTDLP_NODE_PATH = os.environ.get("YTDLP_NODE_PATH", str(_local_node) if _local_node.exists() else "")
+
+# --- Network-sniffing fallback (network_interceptor.py) ---
+# Same idea as YTDLP_COOKIES_FROM_BROWSER above, for the generic Playwright
+# path: a fresh, cookie-less browser context can never get past a site's
+# login wall, even if the *user* is logged in in their own real browser
+# (e.g. Anghami requires a session to play anything, even a preview).
+# Reuses yt-dlp's own cookie-extraction code (yt_dlp.cookies) rather than
+# a separate dependency, since it's already installed and already solves
+# the platform-specific decryption (Linux/GNOME-keyring, Windows DPAPI,
+# macOS Keychain). Empty string disables cookie injection entirely.
+NETWORK_SNIFF_COOKIES_FROM_BROWSER = os.environ.get("NETWORK_SNIFF_COOKIES_FROM_BROWSER", "chrome")

@@ -530,20 +530,76 @@ now in `requirements.txt` with a comment pointing at that exact file for
 whoever bumps yt-dlp later and hits the same failure again. **Verified**
 via `/api/sniff`: real title, 4 real HLS streams up to 1080p.
 
-**Anghami — investigated, confirmed out of scope, not a bug.** yt-dlp has
-no Anghami extractor, so this fell to the Playwright network-sniffing
-fallback (now installed — see below). The fallback loads the page
-correctly (title extracts fine) but observes no media requests. Manual
-investigation with a non-headless-equivalent script found why: clicking
-Anghami's "Play" button while logged out immediately redirects to
-Google/Facebook/Apple OAuth login flows rather than playing anything —
-Anghami requires an authenticated session to play *any* content, even
-previews. Did not pursue further: even with a logged-in session, Anghami
-is a licensed commercial music catalog and near-certainly serves
-DRM (Widevine)-protected audio for real tracks, exactly like Spotify or
-Apple Music — squarely inside this project's explicit, deliberate DRM scope
-line (see `docs/API.md` and README.md). No code change; this is a correct
-"no", not a gap to close.
+**Anghami — investigated twice, confirmed out of scope with hard evidence
+the second time, not a bug.** yt-dlp has no Anghami extractor, so this
+falls to the Playwright network-sniffing fallback.
+
+*First pass* (logged-out): clicking Anghami's "Play" button immediately
+redirected to Google/Facebook/Apple OAuth login flows rather than playing
+anything — Anghami requires an authenticated session to play *any*
+content, even previews. Speculated (but didn't confirm) that real tracks
+are also DRM-protected like Spotify/Apple Music, and stopped there.
+
+*Second pass* (user came back with a screenshot of themselves actually
+logged in and playing a song, asking why sniffing still failed): this
+surfaced a real, general gap worth fixing regardless of Anghami's outcome
+— `network_interceptor.py` always launched a fresh, cookie-less Playwright
+context, so it could never see a real login even when the user has one in
+their own browser. Fixed properly, mirroring the same fix already used
+for `ytdlp_wrapper.py`/YouTube: `_extract_cookies_for_domain()` reuses
+yt-dlp's own cookie-extraction code (`yt_dlp.cookies`, config knob
+`NETWORK_SNIFF_COOKIES_FROM_BROWSER`, default `"chrome"`) to inject the
+user's real session cookies into the sniffing browser context before
+navigating. Also added `_try_trigger_playback()`, a generic (not
+Anghami-specific) best-effort click-a-play-button + call-`.play()`-on-any-
+media-element heuristic, since many sites don't request audio until
+playback is actually triggered by interaction.
+
+**Found two real bugs while building this, both fixed and verified**:
+1. `context.add_cookies()` rejected the whole batch outright if *any*
+   cookie's `expires` was invalid — yt-dlp's extraction occasionally
+   returns `expires` still in Chrome's internal epoch (microseconds since
+   1601-01-01) rather than converted Unix seconds, e.g. `13465644362561492`
+   for one Anghami cookie, which would place that cookie's expiry around
+   the 15th century as a literal timestamp. Fixed with a sane upper bound
+   (year 2100) rather than just checking positivity; anything outside that
+   range gets its `expires` omitted entirely (falls back to session-cookie
+   behavior, harmless for a sniff that only lives a few seconds anyway).
+2. `wait_until="networkidle"` intermittently timed out entirely on
+   Anghami specifically (a site with persistent background
+   polling/analytics connections that may never let the network go fully
+   idle) — not fixed in the shipped code since it self-recovered on retry
+   and wasn't the actual blocker, but worth knowing if `sniff_network`
+   ever needs to get more robust: `domcontentloaded` + an explicit sleep
+   is the more reliable pattern for sites like this.
+
+With cookies genuinely working (`playqueue/fetch`, `liked-albums`,
+`GETuserrelations` all fired — unambiguous proof of an authenticated
+session, and the sniffed page title exactly matched the user's own
+screenshot) and the *correct* single "Play" button confirmed clicked
+(verified via `get_by_text(exact=True)`, one visible match, right
+`outerHTML`), **still no audio stream appeared** in ~20 captured
+responses around the click. What did appear:
+`disableCaptcha=false` as an explicit parameter on Anghami's own
+stream-authorization request, alongside live Google reCAPTCHA calls
+(`recaptcha/api2/reload`, `/bcn`) firing in the same window. **This is
+concrete evidence of active bot-detection gating the play path**, not
+speculation — Anghami runs reCAPTCHA specifically here, and defeating
+that would mean solving/bypassing a CAPTCHA to get past a service's
+deliberate anti-automation protection. That is a different, harder line
+than "sniff what's normally observable on a page" and was not attempted,
+on the same principle as the DRM scope line: this tool doesn't defeat
+deliberate protections, regardless of target. Confirms (with hard
+evidence this time, not just a DRM guess) that Anghami stays out of
+scope. **No further Anghami-specific work should be attempted** — the
+wall here isn't a bug to fix, it's Anghami's product working as designed
+against exactly this kind of access.
+
+The cookie-injection and playback-trigger improvements themselves are
+kept and shipped — genuinely useful for other login-walled-but-not-
+actively-bot-protected sites that fall to this fallback, verified not to
+break the no-cookies/no-media common case (`example.com` still correctly
+returns "no media found" with no errors).
 
 **Playwright is now actually installed** (`sniffer-service/setup.sh` was
 run for real this session, not just written) — `pip install playwright`
