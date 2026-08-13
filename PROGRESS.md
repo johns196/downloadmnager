@@ -1,9 +1,11 @@
 # Progress — Universal Download Manager & Media Grabber
 
 Last updated: 2026-08-13 (initial build session, a same-day follow-up
-fixing real-world YouTube/Dailymotion/Anghami extraction, and a third
+fixing real-world YouTube/Dailymotion/Anghami extraction, a third
 session — spanning a clean pause/resume across a machine shutdown —
-building actual installable native apps for Ubuntu and Android).
+building installable native apps for Ubuntu and Android, and a fourth
+same-day session pushing to GitHub and getting Windows building + iOS
+compiling via CI).
 
 Read this before doing further work here. See also `README.md` (setup
 instructions, scope/legal notes) and `docs/API.md` (the frozen contract
@@ -109,9 +111,9 @@ compiled).**
 **Windows — done, via GitHub Actions CI, verified.** This project is now
 a git repo pushed to `https://github.com/johns196/downloadmnager`
 (public — flagged to the user, their call whether to flip it private).
-`.github/workflows/build-client.yml` builds all three platforms
-(windows-latest, ubuntu-latest × 2) on every push to `main` touching
-`client/**`, or on manual `workflow_dispatch`.
+`.github/workflows/build-client.yml` builds all four platforms
+(windows-latest, ubuntu-latest × 2, macos-latest for iOS) on every push
+to `main` touching `client/**`, or on manual `workflow_dispatch`.
 
 The first two CI runs failed, both for reasons only discoverable by
 actually running on a real Windows runner (impossible on this dev
@@ -143,6 +145,25 @@ x86-64, for MS Windows`, not a truncated or corrupt output. All three
 platform artifacts now sit together in `client/dist/` with consistent
 naming (`download-manager-client_0.1.0_amd64.deb`,
 `..._0.1.0.apk`, `..._0.1.0_windows-x64.zip`).
+
+**iOS — compile-check only, by explicit user choice, passing.** User
+asked about iOS; was given the real tradeoff rather than just building
+something — unlike Windows/Android, iOS enforces code signing at the OS
+level with no unsigned-but-installable path (no SmartScreen-style
+click-through, no APK-style sideload). Getting an app onto an actual
+iPhone needs the user's own Apple Developer Program membership
+($99/year, for TestFlight/App Store) or a free Apple ID (self-signed,
+7-day expiry, one device, needs their own Mac + Xcode) — a real
+cost/setup decision, not something to set up unprompted. User chose the
+"just verify it compiles" option. Added `client/ios/` (same
+`flutter create --platforms=ios .` pattern as Windows, same
+`.metadata` platform-list-gets-overwritten quirk, fixed the same way)
+and a `build-ios` job on `macos-latest` running
+`flutter build ios --release --no-codesign` — no artifact upload,
+since an unsigned build produces nothing installable, only a
+pass/fail signal that the Dart/Flutter code itself is iOS-compatible
+(the same kind of check `flutter analyze` already does for every other
+platform). Passing on the first CI run.
 
 **Also found and fixed while reviewing what `git add --dry-run` would
 stage** (a genuinely useful side effect of checking what's about to be
@@ -654,21 +675,29 @@ afterthought alongside it.
    before any wider distribution (Play Store or otherwise). Same question
    worth asking for the Windows build eventually (unsigned .exe will
    trigger SmartScreen warnings on first run).
-5. Set up a git credential helper (or install `gh` CLI and `gh auth
+5. **iOS currently only compile-checks in CI, produces nothing
+   installable** — deliberate, user chose this scope explicitly (see
+   "iOS" above). If real device distribution is wanted later: user needs
+   an Apple Developer Program membership ($99/year) or their own Mac +
+   free Apple ID for a 7-day self-signed build, then the `build-ios` CI
+   job needs real signing (certificate + provisioning profile as GitHub
+   Actions secrets, `flutter build ipa` instead of `--no-codesign`) —
+   not started, needs the user's account/cost decision first.
+6. Set up a git credential helper (or install `gh` CLI and `gh auth
    login`) so future pushes don't need a token pasted into a command each
    time — this session used a personal access token passed transiently on
    the CLI (never persisted to `.git/config`), which works but isn't
    sustainable for ongoing work.
-6. If the PO token container (`bgutil-pot`) or portable Node
+7. If the PO token container (`bgutil-pot`) or portable Node
    (`.local-node/`) are ever missing on a fresh checkout of this box,
    re-run `sniffer-service/setup.sh` and follow the two manual steps it
    prints — see "Real-world site compatibility" above for the full
    why. `docker ps` / `curl 127.0.0.1:4416/ping` confirm the PO container
    specifically.
-7. Decide whether the global-bandwidth-cap tradeoff above needs a real
+8. Decide whether the global-bandwidth-cap tradeoff above needs a real
    shared token bucket, or whether per-job-cap-with-ceiling is good
    enough for how this is actually going to be used.
-8. `docker compose up --build` once, to actually validate the
+9. `docker compose up --build` once, to actually validate the
    Dockerfiles (and specifically the EXDEV fix noted above, which was
    fixed by inspection but never run inside an actual container) rather
    than just the compose YAML. Remember YouTube won't work there without
