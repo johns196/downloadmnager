@@ -43,24 +43,38 @@ async function renderDomMedia(tabId) {
   // Newest first -- see content-script.js's renderDetectedMedia for why
   // (accumulates every track played this session on an SPA, so insertion
   // order would put the *first* track played on top, not the current one).
-  // titleCounts: confirmed by the user actually downloading and listening
-  // that a repeated title can mean two genuinely different tracks (Anghami
-  // prefetches an upcoming song before its title takes over the tab) --
-  // see content-script.js's renderDetectedMedia for the full reasoning.
+  // Best-guess classification: confirmed by the user actually downloading
+  // and listening that a repeated title can mean two genuinely different
+  // tracks, and that in the one confirmed case the *later* entry under a
+  // shared title was the correct one -- see content-script.js's
+  // renderDetectedMedia for the full reasoning. Used as a best guess, not
+  // a guarantee: the alternative stays fully visible and downloadable.
   const titleCounts = new Map();
-  for (const m of items) if (m.title) titleCounts.set(m.title, (titleCounts.get(m.title) || 0) + 1);
-  for (const item of [...items].reverse()) {
+  const latestIndexForTitle = new Map();
+  items.forEach((m, i) => {
+    if (!m.title) return;
+    titleCounts.set(m.title, (titleCounts.get(m.title) || 0) + 1);
+    latestIndexForTitle.set(m.title, i);
+  });
+  for (const [item, i] of items.map((m, idx) => [m, idx]).reverse()) {
     const wrap = document.createElement("div");
     wrap.className = "stream";
 
     const ambiguous = item.title ? titleCounts.get(item.title) > 1 : false;
+    const isUncertain = ambiguous && latestIndexForTitle.get(item.title) !== i;
     if (item.title) {
       const titleEl = document.createElement("div");
       const shortTitle = item.title.length > 60 ? item.title.slice(0, 57) + "..." : item.title;
-      titleEl.textContent = ambiguous ? `${shortTitle} (unconfirmed)` : shortTitle;
-      titleEl.title = ambiguous
-        ? `${item.title}\n\nThis title is shared by more than one detected file -- could be a different, prefetched track under the same label. Check the downloaded file before trusting the name.`
-        : item.title;
+      if (!ambiguous) {
+        titleEl.textContent = shortTitle;
+        titleEl.title = item.title;
+      } else if (isUncertain) {
+        titleEl.textContent = `${shortTitle} (uncertain -- try the newer entry instead)`;
+        titleEl.title = `${item.title}\n\nAn entry detected later shares this exact title and is more likely correct -- this one may be a different, stale, or previous track. Check the downloaded file before trusting this name.`;
+      } else {
+        titleEl.textContent = `${shortTitle} (likely -- an earlier entry shares this title)`;
+        titleEl.title = `${item.title}\n\nMost recent of multiple detections sharing this title -- best guess based on the one confirmed case so far, not certain. Check the downloaded file if unsure.`;
+      }
       wrap.appendChild(titleEl);
     }
     const nameEl = document.createElement("div");
@@ -72,14 +86,14 @@ async function renderDomMedia(tabId) {
     const downloadBtn = document.createElement("button");
     downloadBtn.className = "btn";
     downloadBtn.textContent = "Download";
-    downloadBtn.addEventListener("click", () => downloadDetected(item, null, ambiguous));
+    downloadBtn.addEventListener("click", () => downloadDetected(item, null, isUncertain));
     wrap.appendChild(downloadBtn);
 
     const mp3Btn = document.createElement("button");
     mp3Btn.className = "btn";
     mp3Btn.textContent = "Convert to MP3";
     mp3Btn.addEventListener("click", () =>
-      downloadDetected(item, { action: "extract-audio", targetContainer: "mp3" }, ambiguous),
+      downloadDetected(item, { action: "extract-audio", targetContainer: "mp3" }, isUncertain),
     );
     wrap.appendChild(mp3Btn);
 
@@ -87,12 +101,12 @@ async function renderDomMedia(tabId) {
   }
 }
 
-async function downloadDetected(item, postProcess, ambiguous) {
+async function downloadDetected(item, postProcess, isUncertain) {
   statusEl.textContent = "Sending to Download Manager...";
   const r = await sendMessage({
     type: "DOWNLOAD_DIRECT",
     url: item.url,
-    filename: filenameFor(item, ambiguous),
+    filename: filenameFor(item, isUncertain),
     postProcess,
   });
   statusEl.textContent = r.ok ? "Queued." : `Error: ${r.error}`;
@@ -113,12 +127,12 @@ function shortHash(str) {
   return (h >>> 0).toString(36);
 }
 
-function filenameFor(item, ambiguous) {
+function filenameFor(item, isUncertain) {
   if (!item.title) return undefined;
   const urlExt = (item.url.split("?")[0].split(".").pop() || "").toLowerCase();
   const ext = /^[a-z0-9]{2,5}$/.test(urlExt) ? urlExt : "bin";
   const safeName = item.title.replace(/[/\\?%*:|"<>]/g, "_").trim().slice(0, 150) || "media";
-  return `${safeName}${ambiguous ? " (unconfirmed)" : ""} [${shortHash(item.url)}].${ext}`;
+  return `${safeName}${isUncertain ? " (uncertain)" : ""} [${shortHash(item.url)}].${ext}`;
 }
 
 function renderStream(stream) {

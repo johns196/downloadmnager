@@ -1050,6 +1050,42 @@ never collide into the same file; this just stops the label from
 asserting something that turned out to be false in a real, user-verified
 case.
 
+## Best-guess ranking for ambiguous titles (same week, immediate follow-up)
+
+User asked directly: is the ambiguous-title problem above actually
+fixable, or is flagging both "(unconfirmed)" the ceiling? Re-examined the
+one confirmed case with that question in mind: within the "Al Aad Al
+Aaksi" group, the *wrong* file (`ANGH1749...`) was the earlier of the two
+detections, and the *correct* one (`6650967771069...`) came right after,
+under the same title. That ordering is consistent with the wrong one
+being a trailing leftover from the previous track's transition settling
+just as the title switches, rather than a next-track prefetch racing
+ahead of it -- i.e. the *later* detection under a repeated title is the
+more likely real, settled fetch for that title.
+
+Only one real case confirms this direction, so it's used as a ranking
+signal, not a filter: for any title shared by 2+ detected items, the most
+recent one is now labeled "likely" (clean name, no scary flag -- it's the
+expected-correct pick) and every earlier one under that same title is
+labeled "uncertain -- try the newer entry instead", pointing the user at
+the better guess directly instead of leaving two identically-flagged
+options to gamble between. Both stay fully visible and downloadable --
+this is a ranking, not a hide -- since the one-data-point signal isn't
+strong enough to justify actually dropping anything. Applied to both the
+displayed label and the saved filename (only the "uncertain" one gets a
+suffix now; the "likely" pick keeps a clean name) in both `content-
+script.js` and `popup.js`.
+
+**Bug caught before shipping**: the first implementation compared items by
+object identity (`sameTitle[...] !== item`) to determine "is this the
+latest". That breaks as soon as `TAB_MEDIA_UPDATED` replaces
+`detectedMedia` wholesale between when the panel renders and when the
+user actually clicks a button (a real timing window, given this list
+updates live) -- the click handler's closure still holds the *old* item
+object, which would never reference-match anything in the *new* array,
+silently misclassifying every item as uncertain. Fixed to compare by
+`.url` instead, which survives the array being replaced.
+
 ## Suggested next steps, in order
 
 1. ~~Load the extension in a real browser~~ — done, this is what surfaced

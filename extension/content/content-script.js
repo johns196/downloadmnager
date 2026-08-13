@@ -125,28 +125,43 @@
     domMediaEl.appendChild(label);
     // Confirmed by the user actually downloading and listening: when two
     // entries share an identical title, one of them can genuinely be a
-    // *different* track (Anghami appears to prefetch an upcoming queued
-    // song's audio before its own title has taken over the tab), so the
-    // repeated title is not corroboration -- it's the exact case where the
-    // title-capture in recordMedia (service-worker.js) is caught mid-
-    // transition and wrong. No reliable signal here for *which* of a
-    // group is the stale/wrong one, so every member of a repeated-title
-    // group gets flagged rather than silently trusting any of them.
+    // different track -- the title-capture in recordMedia
+    // (service-worker.js) caught it mid-transition and got it wrong. In
+    // the one confirmed case, the *earlier* entry under a shared title was
+    // the wrong one (a trailing leftover from the previous track's
+    // transition) and the *later* one was correct -- consistent with a
+    // stale in-flight request settling right as the title switches, before
+    // the new track's own real fetch lands. Used as a best-guess signal,
+    // not a guarantee: only one real case confirms this direction, so the
+    // "likely" pick is still just that -- a guess -- and the alternative
+    // stays fully visible and downloadable rather than hidden.
     const titleCounts = new Map();
-    for (const m of detectedMedia) if (m.title) titleCounts.set(m.title, (titleCounts.get(m.title) || 0) + 1);
-    for (const item of [...detectedMedia].reverse()) {
+    const latestIndexForTitle = new Map();
+    detectedMedia.forEach((m, i) => {
+      if (!m.title) return;
+      titleCounts.set(m.title, (titleCounts.get(m.title) || 0) + 1);
+      latestIndexForTitle.set(m.title, i); // last write wins -- forEach runs in array order, so this ends up as the highest index
+    });
+    for (const [item, i] of detectedMedia.map((m, idx) => [m, idx]).reverse()) {
       const wrap = document.createElement("div");
       wrap.className = "stream";
 
       const filename = item.url.split("/").pop().split("?")[0] || item.url;
       if (item.title) {
         const ambiguous = titleCounts.get(item.title) > 1;
+        const isBestGuess = ambiguous && latestIndexForTitle.get(item.title) === i;
         const titleEl = document.createElement("div");
         const shortTitle = item.title.length > 60 ? item.title.slice(0, 57) + "..." : item.title;
-        titleEl.textContent = ambiguous ? `${shortTitle} (unconfirmed)` : shortTitle;
-        titleEl.title = ambiguous
-          ? `${item.title}\n\nThis title is shared by more than one detected file -- could be a different, prefetched track under the same label. Check the downloaded file before trusting the name.`
-          : item.title;
+        if (!ambiguous) {
+          titleEl.textContent = shortTitle;
+          titleEl.title = item.title;
+        } else if (isBestGuess) {
+          titleEl.textContent = `${shortTitle} (likely -- an earlier entry shares this title)`;
+          titleEl.title = `${item.title}\n\nMost recent of multiple detections sharing this title -- best guess based on the one confirmed case so far, not certain. Check the downloaded file if unsure.`;
+        } else {
+          titleEl.textContent = `${shortTitle} (uncertain -- try the newer entry instead)`;
+          titleEl.title = `${item.title}\n\nAn entry detected later shares this exact title and is more likely correct -- this one may be a different, stale, or previous track. Check the downloaded file before trusting this name.`;
+        }
         wrap.appendChild(titleEl);
       }
       const nameEl = document.createElement("div");
@@ -197,14 +212,21 @@
     if (!item.title) return undefined; // no title captured -- let the backend derive one from the URL, as before
     const urlExt = (item.url.split("?")[0].split(".").pop() || "").toLowerCase();
     const ext = /^[a-z0-9]{2,5}$/.test(urlExt) ? urlExt : "bin";
-    // Same ambiguity check as renderDetectedMedia -- a repeated title can
-    // be a genuinely different (prefetched) track, confirmed by the user
-    // downloading one and checking. The hash already guarantees the file
-    // won't collide with the other one sharing this title; this just keeps
-    // the saved filename from asserting a name that later turns out wrong.
-    const ambiguous = detectedMedia.filter((m) => m.title === item.title).length > 1;
+    // Same best-guess classification as renderDetectedMedia -- see that
+    // comment for why the *later* entry under a repeated title is the
+    // likely-correct one. Only the uncertain (earlier) member of a group
+    // gets flagged; the best guess keeps a clean name since it's the one
+    // expected to actually be right. The hash suffix already guarantees no
+    // collision between the two regardless of this label.
+    // Compare by url, not object identity -- detectedMedia can be replaced
+    // wholesale by a live TAB_MEDIA_UPDATED push between when the panel was
+    // rendered and when this runs (the click handler closure still holds
+    // the old item object), so a `!==` object check would silently
+    // misclassify every item as uncertain once that's happened once.
+    const sameTitle = detectedMedia.filter((m) => m.title === item.title);
+    const isUncertain = sameTitle.length > 1 && sameTitle[sameTitle.length - 1].url !== item.url;
     const safeName = item.title.replace(/[/\\?%*:|"<>]/g, "_").trim().slice(0, 150) || "media";
-    return `${safeName}${ambiguous ? " (unconfirmed)" : ""} [${shortHash(item.url)}].${ext}`;
+    return `${safeName}${isUncertain ? " (uncertain)" : ""} [${shortHash(item.url)}].${ext}`;
   }
 
   async function downloadDetected(item, postProcess) {
