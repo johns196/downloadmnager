@@ -1,0 +1,84 @@
+name: Build native clients
+
+# Builds the Flutter client in client/ for Windows, Linux, and Android on
+# every push to main and on demand. Windows specifically can only be
+# built here or on an actual Windows machine -- Flutter cannot
+# cross-compile Windows targets from Linux, which is why this workflow
+# exists at all rather than just running the build locally (see
+# PROGRESS.md "Native app builds" for the full context: Linux and Android
+# were already built and verified locally on the original dev machine;
+# this workflow is what makes Windows possible, and gives Linux/Android a
+# reproducible from-clean build alongside it).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "client/**"
+      - ".github/workflows/build-client.yml"
+  workflow_dispatch: {}
+
+env:
+  FLUTTER_VERSION: "3.27.1"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+      - working-directory: client
+        run: flutter pub get
+      - working-directory: client
+        run: flutter build windows --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: download-manager-client-windows
+          path: client/build/windows/x64/runner/Release/
+          if-no-files-found: error
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux desktop build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+      - working-directory: client
+        run: flutter pub get
+      - working-directory: client
+        run: flutter build linux --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: download-manager-client-linux
+          path: client/build/linux/x64/release/bundle/
+          if-no-files-found: error
+
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+      - working-directory: client
+        run: flutter pub get
+      - working-directory: client
+        run: flutter build apk --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: download-manager-client-android
+          path: client/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error

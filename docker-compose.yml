@@ -1,0 +1,60 @@
+services:
+  # PO (proof-of-origin) token server yt-dlp needs to extract anything
+  # from YouTube -- see PROGRESS.md and sniffer-service/app/config.py for
+  # why. Restart policy deliberately "no", matching every other service
+  # here: nothing in this stack should come back after a host reboot
+  # without being started on purpose.
+  bgutil-pot:
+    image: brainicism/bgutil-ytdlp-pot-provider:latest
+    restart: "no"
+    expose:
+      - "4416"
+
+  sniffer-service:
+    build: ./sniffer-service
+    restart: "no"
+    depends_on:
+      - bgutil-pot
+    environment:
+      YTDLP_POT_SERVER_BASE_URL: "http://bgutil-pot:4416"
+      # Unset (not just "empty"): --cookies-from-browser reads a live
+      # Chrome profile, which only exists on a machine actually running
+      # Chrome -- there is no browser inside this container to read from.
+      # Without it, YouTube's bot-check blocks extraction entirely (PO
+      # token + newer Node alone aren't sufficient -- see PROGRESS.md).
+      # Every other yt-dlp-supported site, and the Playwright fallback,
+      # work fine without it.
+      YTDLP_COOKIES_FROM_BROWSER: ""
+    # Internal only -- the backend reaches it over the compose network by
+    # service name (SNIFFER_SERVICE_URL below), nothing outside this
+    # docker-compose project needs to talk to it directly.
+    expose:
+      - "8788"
+
+  backend:
+    build: ./backend
+    restart: "no"
+    depends_on:
+      - sniffer-service
+    environment:
+      # HOST=0.0.0.0 here is correct *inside* the container -- the
+      # container's own network namespace is already isolated, and the
+      # localhost-only guarantee is enforced below by binding the
+      # published port to 127.0.0.1 on the Docker host instead. This is
+      # the opposite of backend/.env.example's HOST=127.0.0.1 default,
+      # which is for running the backend natively (no container boundary).
+      HOST: "0.0.0.0"
+      PORT: "8787"
+      SNIFFER_SERVICE_URL: "http://sniffer-service:8788"
+      DOWNLOADS_DIR: "/data/downloads"
+      DATA_DIR: "/data/db"
+      DB_PATH: "/data/db/download-manager.db"
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - downloads:/data/downloads
+      - db:/data/db
+
+volumes:
+  downloads:
+  db:

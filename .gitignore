@@ -1,0 +1,37 @@
+# Backend
+backend/node_modules/
+backend/dist/
+backend/downloads/
+backend/data/
+backend/tmp/
+backend/.env
+
+# Sniffer service
+sniffer-service/.venv/
+sniffer-service/__pycache__/
+sniffer-service/**/__pycache__/
+# Portable Node.js setup.sh downloads when the system Node is < v22 --
+# see app/config.py YTDLP_NODE_PATH.
+sniffer-service/.local-node/
+
+# Flutter client -- note: once `flutter create .` generates the platform
+# runner folders (android/, ios/, macos/, windows/, linux/), those are
+# normally committed (they hold per-platform config like bundle IDs and
+# permissions), not ignored. Only the SDK-generated/build artifacts below
+# are ignored, per standard Flutter convention.
+client/.dart_tool/
+client/.flutter-plugins
+client/.flutter-plugins-dependencies
+client/build/
+
+# Extension (no build step, nothing to ignore -- unpacked source is the artifact)
+
+*.log
+.DS_Store
+.dev-logs/
+
+# Local build toolchain (Flutter SDK, portable JDK, Android SDK) -- a few
+# GB, downloaded on-demand by whoever builds the native apps, not part of
+# the shipped product.
+.toolchain/
+client/dist/

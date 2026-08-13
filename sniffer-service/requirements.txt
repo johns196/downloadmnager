@@ -1,0 +1,29 @@
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+pydantic==2.10.3
+# Not pinned: yt-dlp ships near-daily releases patching site-specific
+# breakage (YouTube's anti-bot checks especially) -- pinning here would
+# just mean re-discovering "why did YouTube stop working" every few
+# months. Re-run `pip install --upgrade yt-dlp` in this venv whenever
+# extraction starts failing on a site that used to work.
+yt-dlp>=2026.7.4
+# Required for sites (Dailymotion, some others) whose extractor demands
+# TLS-fingerprint impersonation. Range constrained by yt_dlp/networking/
+# _curlcffi.py in whatever yt-dlp version is installed -- if a yt-dlp
+# upgrade starts raising "Only curl_cffi versions ... are supported" on
+# import, re-check that file's supported range before bumping this.
+curl_cffi==0.13.0
+# Both required for reliable YouTube extraction specifically -- without
+# them yt-dlp returns storyboard-only "formats" (no real audio/video) even
+# with a valid cookies-from-browser session. yt-dlp-ejs provides the JS
+# challenge-solver script bundle; bgutil-ytdlp-pot-provider is the client
+# half of a PO (proof-of-origin) token provider -- its server half is a
+# separate process, see setup.sh and PROGRESS.md.
+yt-dlp-ejs>=0.8.0
+bgutil-ytdlp-pot-provider>=1.3.1
+# Reading Chrome's encrypted cookie store (for --cookies-from-browser, see
+# config.py YTDLP_COOKIES_FROM_BROWSER) needs this on Linux with a GNOME
+# keyring; without it, cookie extraction partially fails silently rather
+# than erroring, which is worse than an explicit dependency here.
+secretstorage>=3.5.0
+playwright==1.49.1

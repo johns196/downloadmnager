@@ -1,0 +1,108 @@
+body {
+  width: 340px;
+  margin: 0;
+  font-family: system-ui, -apple-system, sans-serif;
+  background: #111827;
+  color: #e5e7eb;
+  font-size: 13px;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #374151;
+}
+
+header h1 {
+  flex: 1;
+}
+
+.icon-btn {
+  background: none;
+  border: none;
+  color: #9ca3af;
+  cursor: pointer;
+  font-size: 15px;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.icon-btn:hover {
+  color: #e5e7eb;
+  background: #1f2937;
+}
+
+h1 {
+  font-size: 15px;
+  margin: 0;
+}
+
+h2 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #9ca3af;
+  margin: 0 0 6px;
+}
+
+section {
+  padding: 12px 14px;
+  border-bottom: 1px solid #1f2937;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #6b7280;
+  display: inline-block;
+}
+.status-dot.ok {
+  background: #22c55e;
+}
+.status-dot.down {
+  background: #ef4444;
+}
+
+.btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: #1f2937;
+  color: #e5e7eb;
+  border: 1px solid #374151;
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.btn:hover {
+  background: #374151;
+}
+.btn-primary {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+  text-align: center;
+}
+.btn-primary:hover {
+  background: #1d4ed8;
+}
+
+.muted {
+  color: #9ca3af;
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+.stream {
+  border-top: 1px solid #374151;
+  padding-top: 8px;
+  margin-top: 8px;
+}
+
+footer {
+  padding: 10px 14px;
+}
