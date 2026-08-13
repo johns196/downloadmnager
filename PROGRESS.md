@@ -1178,6 +1178,65 @@ it instead of missing. Asked the user whether to filter
 `AnghamiPlusFeatures`-style promo clips out entirely (site-specific, so
 not done without asking) or leave them visible.
 
+## Cross-platform parity check (same week, immediate follow-up)
+
+User asked directly: did all of today's fixes make it to all four
+platforms (Windows/Ubuntu/iOS/Android), not just the browser extension?
+Worth answering carefully rather than assuming, since this project has
+three genuinely different distribution mechanisms layered together:
+
+- Backend + sniffer-service fixes (networkidle timeout, stale sniff
+  cache, postProcess-through-jobs) are shared infrastructure every client
+  hits through the same API -- these needed no porting, all four Flutter
+  builds and the extension already go through them.
+- The "know what's currently playing" live-detection feature is
+  inherently extension-only (`chrome.webRequest` on a real browser tab) --
+  correctly out of scope for the native apps, already noted as such.
+- The Flutter **client source** (`client/lib/`) is one Dart codebase
+  compiled four ways -- a source fix there needs porting once, but each
+  platform's *installable artifact* still needs an actual rebuild to
+  contain it.
+
+Checked `sniffer_screen.dart` (the Flutter client's manual-sniff screen,
+the equivalent of the extension's popup) against today's extension fixes
+and found the **exact same bug**: `if (!stream.isAudioOnly)` hiding
+"Extract audio (MP3)" precisely when a stream is already audio (Anghami's
+m4a case). Never caught before because nobody had exercised MP3
+conversion from this screen specifically. Fixed identically to the
+extension (gate on `stream.container != "mp3"`). Confirmed no other
+source-level gaps: `library_screen.dart`'s delete button (added earlier
+this session) is the only other Flutter-specific change and was already
+in place; the title-display the extension needed to add was already
+present in `sniffer_screen.dart` from before.
+
+**Artifact rebuild, not just source fix**: confirmed via the GitHub API
+that CI (`build-client.yml`) auto-triggers on every `client/**` push and
+had already rebuilt all four platforms once today (for the delete-button
+commit, `057a37d`) -- but pushing the `sniffer_screen.dart` fix
+(`618b6cf`) was still needed to get *that* fix built anywhere. Rebuilt
+the Android APK locally too (`JAVA_HOME` needed pointing at
+`.toolchain/jdk-17` -- not set by default in this shell), matching the
+existing local Ubuntu `.deb` rebuild pattern.
+
+**Found and fixed a distribution gap unrelated to the code itself**: the
+CI workflow only uploads expiring, login-gated workflow-run artifacts --
+it has no step that touches the permanent public GitHub Release (that was
+a one-time manual `gh`-less API publish from an earlier session). So the
+Release's public download links were serving **stale binaries with none
+of today's fixes** even after CI succeeded. Not a workflow bug to fix
+generally (would need a `softprops/action-gh-release`-style step added
+deliberately, not done here since it changes what every future push does
+without being asked) -- but for *today's* fixes specifically, downloaded
+the four fresh CI artifacts, repackaged the Windows one into the same
+flat-zip shape as the existing release asset, deleted the four stale
+release assets, and uploaded the fresh ones in their place via the
+GitHub API. Verified afterward: all four assets' `updated_at` now matches
+this session, sizes changed (confirming real rebuilds, not no-ops).
+
+**Bottom line**: as of this round, all four platform builds behind
+`github.com/johns196/downloadmnager/releases/tag/v0.1.0` contain every
+fix from this entire session, not just the extension.
+
 ## Suggested next steps, in order
 
 1. ~~Load the extension in a real browser~~ — done, this is what surfaced
