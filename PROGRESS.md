@@ -1011,6 +1011,45 @@ clear out duplicate files created while testing.
    still have their old CDN-hash names; the new delete button is how to
    clear those, not a retroactive rename.
 
+## Ambiguous titles on prefetched tracks (same week, immediate follow-up)
+
+User pushed back correctly on the "audio + unrelated promo video" theory
+from the round above with a *different* concrete example: two entries
+under "Al Aad Al Aaksi - Marwan Khoury & Elissa", both clearly audio-shaped
+filenames (`6650967771069_LBA132501377_MD5_...m4a` and
+`ANGH1749299081692769.m4a`), not audio+video. Tried to settle it with a
+disposable headless Playwright test (cookies injected, real "Play" button
+clicked) rather than guess again or touch the user's live session — got
+zero media requests both attempts, consistent with the already-documented
+Anghami reCAPTCHA/bot-detection wall gating the stream-authorization path
+in any non-live-session context. So no clean automated repro was possible
+here; asked the user to check directly instead.
+
+**They did, and found the real mechanism**: downloaded and listened to
+both files. The first (`6650967771069...`) was the correct track. The
+second (`ANGH1749...`) was actually a *different, next-queued* song,
+mislabeled with the current track's title. Best explanation: Anghami
+prefetches an upcoming queued track's audio before that track's own title
+has taken over the tab, so `recordMedia`'s live `chrome.tabs.get(tabId)`
+title read (added in the round above) catches it mid-transition and
+stamps it with the wrong (current, not upcoming) title.
+
+This is exactly the "confidently wrong is worse than no name" failure
+mode flagged during design of the title-capture feature — now confirmed
+with a real example instead of being theoretical. Fix: **when a title
+repeats across two or more detected items, no attempt is made to guess
+which one is correct** (no reliable signal for that — could just as
+easily be a trailing request for the *previous* track completing right as
+the title changes, not only a next-track prefetch; the user's one data
+point doesn't establish a direction to trust). Instead every item sharing
+that title gets flagged " (unconfirmed)" in both the displayed name and
+the actual saved filename (`content-script.js` and `popup.js`, both the
+render function and `filenameFor`), with a tooltip explaining why. The
+uniqueness hash suffix from the round above already guarantees these
+never collide into the same file; this just stops the label from
+asserting something that turned out to be false in a real, user-verified
+case.
+
 ## Suggested next steps, in order
 
 1. ~~Load the extension in a real browser~~ — done, this is what surfaced
