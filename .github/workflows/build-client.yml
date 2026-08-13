@@ -1,14 +1,15 @@
 name: Build native clients
 
-# Builds the Flutter client in client/ for Windows, Linux, and Android on
-# every push to main and on demand. Windows specifically can only be
-# built here or on an actual Windows machine -- Flutter cannot
-# cross-compile Windows targets from Linux, which is why this workflow
-# exists at all rather than just running the build locally (see
-# PROGRESS.md "Native app builds" for the full context: Linux and Android
-# were already built and verified locally on the original dev machine;
-# this workflow is what makes Windows possible, and gives Linux/Android a
-# reproducible from-clean build alongside it).
+# Builds the Flutter client in client/ for Windows, Linux, Android, and
+# (compile-check only) iOS on every push to main and on demand. Windows
+# and iOS specifically can only be built here or on a real
+# Windows/Mac machine -- Flutter cannot cross-compile either from Linux,
+# which is why this workflow exists at all rather than just running the
+# build locally (see PROGRESS.md "Native app builds" for the full
+# context: Linux and Android were already built and verified locally on
+# the original dev machine; this workflow is what makes Windows/iOS
+# possible, and gives Linux/Android a reproducible from-clean build
+# alongside them).
 on:
   push:
     branches: [main]
@@ -94,3 +95,29 @@ jobs:
           name: download-manager-client-android
           path: client/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
+
+  build-ios:
+    # Compile-check only, deliberately not a real distributable build --
+    # see PROGRESS.md "iOS" for why. iOS enforces code signing at the OS
+    # level; there is no unsigned-but-runnable equivalent to Windows's
+    # "click through SmartScreen" or Android's sideload-an-APK. Actually
+    # installing on a device needs an Apple Developer Program membership
+    # (TestFlight/App Store) or a free Apple ID (self-signed, 7-day
+    # expiry, one physical device, needs Xcode on the installer's own
+    # Mac) -- both are the user's account/cost decision, not something to
+    # set up unprompted. This job only confirms the Dart/Flutter code
+    # itself is iOS-compatible, the same kind of check `flutter analyze`
+    # already does for the other platforms.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Unpinned for the same reason as build-windows above: avoid
+      # re-hitting a platform-detection bug specific to the older
+      # version already validated for Linux/Android.
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - working-directory: client
+        run: flutter pub get
+      - working-directory: client
+        run: flutter build ios --release --no-codesign
