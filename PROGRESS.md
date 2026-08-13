@@ -106,36 +106,43 @@ compiled).**
   for personal use, would need proper signing before any app-store or
   wider distribution).
 
-**Windows — in progress as of this note, via GitHub Actions CI** (a later
-same-day session; user came back and asked for Windows + a GitHub repo
-together). `git init` run locally, `.github/workflows/build-client.yml`
-written: three independent jobs (windows-latest, ubuntu-latest,
-ubuntu-latest) building Windows/Linux/Android respectively on every push
-to `main` that touches `client/**`, or on manual `workflow_dispatch`.
-Windows and Android artifact output paths in that workflow
-(`client/build/windows/x64/runner/Release/`,
-`client/build/app/outputs/flutter-apk/app-release.apk`) are standard
-Flutter conventions but **the Windows one specifically has never been
-verified** — this machine cannot run a Windows build to check, so the
-first real CI run is the first time that path gets tested. If the
-Windows job's upload-artifact step fails, that path is the first thing to
-check. The Linux/Android paths in the workflow match exactly what was
-already confirmed working locally (see above).
+**Windows — done, via GitHub Actions CI, verified.** This project is now
+a git repo pushed to `https://github.com/johns196/downloadmnager`
+(public — flagged to the user, their call whether to flip it private).
+`.github/workflows/build-client.yml` builds all three platforms
+(windows-latest, ubuntu-latest × 2) on every push to `main` touching
+`client/**`, or on manual `workflow_dispatch`.
 
-**Blocked on, as of this note**: the user needs to (a) create the GitHub
-repo itself and give the URL, and (b) run `gh auth login` (or otherwise
-authenticate) since neither `gh` CLI nor any git credentials exist on
-this machine yet. Per the "Git Safety Protocol" this agent always follows
-in this environment, `git config` (user.name/user.email, required before
-any commit) was deliberately **not** set by the agent either — the user
-needs to run that themselves too, one time:
-```bash
-git config --global user.name "Your Name"
-git config --global user.email "your@email.com"
-```
-Once both are done: `git remote add origin <url>`, first commit, push.
-The workflow file is already sitting in `.github/workflows/`, so the
-first push will also trigger the first CI run automatically.
+The first two CI runs failed, both for reasons only discoverable by
+actually running on a real Windows runner (impossible on this dev
+machine) — real bugs found and fixed, not configuration guesses:
+1. **"No Windows desktop project configured."** `flutter create` had
+   only ever been run locally with `--platforms=linux,android` (the two
+   this machine could build), so `client/windows/` never existed. Fixed:
+   ran `flutter create --platforms=windows .` (added the runner folder
+   without touching existing `android/`/`linux/`/`lib/`; also had to
+   manually restore the `android`/`linux` entries in `client/.metadata`
+   that command incorrectly dropped instead of appending to).
+2. **CMake error: "Generator Visual Studio 16 2019 could not find any
+   instance of Visual Studio."** Traced into Flutter 3.27.1's own
+   source (`flutter_tools/lib/src/windows/visual_studio.dart`): its
+   `cmakeGenerator` getter only special-cases detected major version
+   `17` (→ "Visual Studio 17 2022") and falls back to hardcoding the
+   "Visual Studio 16 2019" generator string for anything else — and
+   whatever VS2022 build `windows-latest` actually has apparently didn't
+   parse as major version 17 under this Dec-2024-era Flutter release.
+   Fixed by *not* pinning the Windows CI job to the same Flutter version
+   used locally (3.27.1) — it now uses current `stable` instead, unpinned,
+   while Linux/Android stay pinned to 3.27.1 (the exact version already
+   validated by a real local build, deliberately not touched).
+
+**Verified, not just "build succeeded"**: downloaded the actual
+`download-manager-client-windows` CI artifact and ran `file` on the
+extracted `.exe` and `.dll` — confirmed genuine `PE32+ executable (GUI)
+x86-64, for MS Windows`, not a truncated or corrupt output. All three
+platform artifacts now sit together in `client/dist/` with consistent
+naming (`download-manager-client_0.1.0_amd64.deb`,
+`..._0.1.0.apk`, `..._0.1.0_windows-x64.zip`).
 
 **Also found and fixed while reviewing what `git add --dry-run` would
 stage** (a genuinely useful side effect of checking what's about to be
@@ -637,27 +644,31 @@ afterthought alongside it.
    zero real errors. ~~Build and install the Ubuntu/Android apps~~ — also
    done, see "Native app builds" above; both are real, tested, installable
    artifacts in `client/dist/`, not just successful compiler runs.
-3. **Windows build** is the one remaining client-platform gap. Needs
-   either an actual Windows machine, or: `git init` this project, push it
-   to a GitHub remote, and set up a GitHub Actions workflow with a
-   `windows-latest` runner calling `flutter build windows`. Neither the
-   git init nor the GitHub remote exist yet — both are real decisions for
-   the user (a remote in particular means picking where this code lives
-   publicly/privately), not something to do unprompted.
+3. ~~Windows build~~ — done via GitHub Actions CI, see "Native app
+   builds" above. Repo: `https://github.com/johns196/downloadmnager`
+   (public). Re-run any time via `workflow_dispatch` on the Actions tab,
+   or just push a `client/**` change.
 4. **APK is unsigned** (release-mode build, but no distribution signing
    key) — fine for installing directly on a personal device via `adb
    install` or sideloading, but would need a proper Android signing setup
-   before any wider distribution (Play Store or otherwise).
-5. If the PO token container (`bgutil-pot`) or portable Node
+   before any wider distribution (Play Store or otherwise). Same question
+   worth asking for the Windows build eventually (unsigned .exe will
+   trigger SmartScreen warnings on first run).
+5. Set up a git credential helper (or install `gh` CLI and `gh auth
+   login`) so future pushes don't need a token pasted into a command each
+   time — this session used a personal access token passed transiently on
+   the CLI (never persisted to `.git/config`), which works but isn't
+   sustainable for ongoing work.
+6. If the PO token container (`bgutil-pot`) or portable Node
    (`.local-node/`) are ever missing on a fresh checkout of this box,
    re-run `sniffer-service/setup.sh` and follow the two manual steps it
    prints — see "Real-world site compatibility" above for the full
    why. `docker ps` / `curl 127.0.0.1:4416/ping` confirm the PO container
    specifically.
-6. Decide whether the global-bandwidth-cap tradeoff above needs a real
+7. Decide whether the global-bandwidth-cap tradeoff above needs a real
    shared token bucket, or whether per-job-cap-with-ceiling is good
    enough for how this is actually going to be used.
-7. `docker compose up --build` once, to actually validate the
+8. `docker compose up --build` once, to actually validate the
    Dockerfiles (and specifically the EXDEV fix noted above, which was
    fixed by inspection but never run inside an actual container) rather
    than just the compose YAML. Remember YouTube won't work there without

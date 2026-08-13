@@ -100,9 +100,10 @@ either.
 `chrome://extensions` -> enable Developer mode -> "Load unpacked" ->
 select the `extension/` folder. Requires the backend to be running.
 
-### 4. Native apps (Ubuntu desktop + Android)
+### 4. Native apps (Ubuntu desktop, Android, Windows)
 
-Already built. Install directly, no Flutter SDK needed just to use them:
+All three are already built. Ubuntu and Android install directly, no
+Flutter SDK needed:
 
 ```bash
 # Ubuntu -- installs as a real app with an icon in your application menu
@@ -114,6 +115,16 @@ adb install client/dist/download-manager-client_0.1.0.apk
 # unknown sources" -- it's release-mode but not signed for distribution)
 ```
 
+Windows can't be built on this machine (Flutter can't cross-compile
+Windows targets from Linux) -- it's built by
+`.github/workflows/build-client.yml` on GitHub Actions instead, on every
+push to `main` touching `client/**`. Grab the latest build from the repo's
+Actions tab (`download-manager-client-windows` artifact) or
+`client/dist/download-manager-client_0.1.0_windows-x64.zip` if it's
+already been pulled locally -- unzip and run
+`download_manager_client.exe`. Unsigned, so Windows SmartScreen will warn
+on first run.
+
 To rebuild after changing `client/lib/` (Flutter SDK is installed at
 `.toolchain/flutter`, not on system `PATH`):
 
@@ -124,11 +135,8 @@ export ANDROID_SDK_ROOT="$PWD/.toolchain/android-sdk"   # Android builds only
 cd client
 flutter build linux --release   # needs: sudo apt install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev (one-time)
 flutter build apk --release
+git push   # rebuilds Windows via CI
 ```
-
-Windows isn't buildable from this machine at all (Flutter can't
-cross-compile Windows targets from Linux) -- needs either a Windows
-machine or a CI pipeline, see `PROGRESS.md`.
 
 ## Pointing a client at a different backend
 
