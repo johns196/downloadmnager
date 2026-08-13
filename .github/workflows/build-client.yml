@@ -18,6 +18,9 @@ on:
   workflow_dispatch: {}
 
 env:
+  # Linux/Android are pinned to the exact version already validated by a
+  # real local build (see PROGRESS.md) -- deliberately not bumped, to
+  # avoid trading a known-good result for an unknown one.
   FLUTTER_VERSION: "3.27.1"
 
 jobs:
@@ -25,9 +28,18 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      # Deliberately *not* pinned to FLUTTER_VERSION (3.27.1): that
+      # release's Visual Studio detection
+      # (packages/flutter_tools/lib/src/windows/visual_studio.dart)
+      # only recognizes major version 17 explicitly and falls back to
+      # requesting the "Visual Studio 16 2019" CMake generator for
+      # anything it doesn't recognize -- which is exactly what happened
+      # against this runner's VS2022 install, since a version string this
+      # Dec-2024-era Flutter release wasn't tested against didn't parse
+      # as major version 17. Using current stable picks up whatever fix
+      # landed since. If this job ever regresses, check here first.
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
       - working-directory: client
         run: flutter pub get
