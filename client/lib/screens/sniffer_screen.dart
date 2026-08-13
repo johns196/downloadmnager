@@ -145,10 +145,18 @@ class _SnifferScreenState extends State<SnifferScreen> {
                     tooltip: "Download",
                     onPressed: () => _grab(stream),
                   ),
-                  if (!stream.isAudioOnly)
+                  // Anything not already mp3 -- a video stream (extract its
+                  // audio track) or an audio stream in another container
+                  // like Anghami's m4a -- can go through ffmpeg's
+                  // extract-audio action; ffmpeg's -vn is a no-op when
+                  // there's no video track, so this is safe for
+                  // audio-only sources too. Same fix as the browser
+                  // extension's popup.js/content-script.js, which had the
+                  // identical `!isAudioOnly` gate backwards.
+                  if (stream.container != "mp3")
                     IconButton(
                       icon: const Icon(Icons.audiotrack),
-                      tooltip: "Extract audio (MP3)",
+                      tooltip: stream.isAudioOnly ? "Convert to MP3" : "Extract audio (MP3)",
                       onPressed: () => _grab(stream, extractAudio: true),
                     ),
                 ],
