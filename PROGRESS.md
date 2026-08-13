@@ -730,6 +730,54 @@ afterthought alongside it.
   ffmpeg handles segment fetch/concat itself; there's no hand-rolled HLS
   segment logic in this codebase, deliberately.
 
+## Firefox compatibility (extension)
+
+User asked whether the sniffer/extension works in Firefox too — it had
+only ever been targeted at Chrome/Chromium. Checked with Mozilla's own
+official validator (`web-ext lint`, via `npx web-ext@latest`) rather than
+guessing, since MV3-on-Firefox has real, specific differences from
+MV3-on-Chrome:
+
+1. **`background.service_worker` alone doesn't work on Firefox** — Firefox
+   MV3 background scripts run as an Event Page, not a true Service
+   Worker, and are declared via `background.scripts` (an array), not
+   `background.service_worker`. Fixed by declaring both keys in the same
+   `background` object (the standard cross-browser pattern): Chrome reads
+   `service_worker` and ignores `scripts`, Firefox reads `scripts` and
+   ignores `service_worker` (logs a harmless informational warning about
+   it, confirmed via lint — not an error).
+2. **`browser_specific_settings.gecko.id` is required** in Manifest V3 —
+   Chrome auto-generates an extension ID, Firefox requires one declared
+   explicitly. Added
+   `download-manager-grabber@globymall-tech.local`.
+3. **`data_collection_permissions` is required** (a newer Firefox privacy
+   requirement) — declared `{"required": ["none"]}` since this extension
+   collects/sends nothing except to the user's own localhost backend.
+   This key needs Firefox ≥140 (desktop) / ≥142 (Android) to even be
+   recognized, so `strict_min_version` was set to `142.0` to cover both
+   and avoid a version-mismatch warning.
+
+After these three fixes, `web-ext lint` reports **zero errors**, one
+purely-informational warning (Chrome's `service_worker` key being
+correctly ignored on Firefox, exactly as intended by declaring both keys).
+
+**Not verified live.** This machine has Firefox installed, and even a
+real display (confirmed earlier in a different investigation), but the
+*user's own actual Firefox session was already running* on this box when
+this was being tested (real profile, real tabs, hours of uptime) —
+deliberately did not attempt to drive or attach to it via `web-ext run`'s
+remote-debugging behavior, to avoid any risk of disrupting a live session
+that isn't mine to touch. So: **the manifest is now Firefox-valid per
+Mozilla's own tooling, but nobody has actually clicked "Load Temporary
+Add-on" in `about:debugging` and confirmed it runs.** One specific thing
+worth checking when that happens: this codebase calls `chrome.*` APIs
+(e.g. `await chrome.storage.local.get(...)`) in Promise style with no
+callback, which is standard for Chrome's MV3 `chrome.*` — Firefox is
+documented to support this too (not just via the `browser.*` namespace),
+but that's the one area with any real uncertainty left. If the extension
+loads in Firefox but a storage-touching feature (backend URL setting,
+detected-media badge) silently doesn't work, start there.
+
 ## Suggested next steps, in order
 
 1. ~~Load the extension in a real browser~~ — done, this is what surfaced
